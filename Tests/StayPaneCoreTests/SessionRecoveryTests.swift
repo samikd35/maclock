@@ -205,7 +205,7 @@ import Testing
     try engine.advance()
     clock.advance(by: 12)
 
-    try engine.interrupt(reason: .accessibilityPermissionLost)
+    try engine.interrupt(reason: .enforcementUnavailable)
 
     #expect(try store.load() == nil)
     #expect(enforcement.stopCount == 1)
@@ -214,9 +214,45 @@ import Testing
         return
     }
     #expect(interruptedSession.plan.targets == [.application(target)])
-    #expect(interruptedSession.reason == .accessibilityPermissionLost)
+    #expect(interruptedSession.reason == .enforcementUnavailable)
     #expect(interruptedSession.actualFocusDuration == 12)
 
+    let nextEngine = SessionEngine(
+        clock: clock,
+        enforcement: RecoveryTestEnforcement(),
+        recoveryStore: store
+    )
+    #expect(try nextEngine.recover() == .none)
+}
+
+@MainActor
+@Test func interruptionCannotResumeWhenActiveSnapshotDeletionFails() throws {
+    let store = InMemorySessionRecoveryStore()
+    let clock = RecoveryTestClock(
+        now: Date(timeIntervalSince1970: 4_100),
+        continuousNow: 10
+    )
+    let enforcement = RecoveryTestEnforcement()
+    let engine = SessionEngine(
+        clock: clock,
+        enforcement: enforcement,
+        recoveryStore: store
+    )
+    engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
+    engine.select(
+        target: ApplicationTarget(
+            displayName: "Editor",
+            bundleIdentifier: "com.example.editor"
+        )
+    )
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    store.clearError = .unavailable
+
+    try engine.interrupt(reason: .enforcementUnavailable)
+
+    #expect(store.hasInterruptionMarker)
+    #expect(enforcement.stopCount == 1)
     let nextEngine = SessionEngine(
         clock: clock,
         enforcement: RecoveryTestEnforcement(),
@@ -416,6 +452,8 @@ import Testing
 @MainActor
 private final class InMemorySessionRecoveryStore: SessionRecoveryPersisting {
     private var snapshot: SessionRecoverySnapshot?
+    var clearError: RecoveryTestError?
+    private(set) var hasInterruptionMarker = false
 
     func load() throws -> SessionRecoverySnapshot? {
         snapshot
@@ -423,10 +461,23 @@ private final class InMemorySessionRecoveryStore: SessionRecoveryPersisting {
 
     func save(_ snapshot: SessionRecoverySnapshot) throws {
         self.snapshot = snapshot
+        hasInterruptionMarker = false
+    }
+
+    func markInterrupted(
+        at interruptedAt: Date,
+        reason: SessionInterruptionReason
+    ) throws {
+        snapshot = nil
+        hasInterruptionMarker = true
     }
 
     func clear() throws {
+        if let clearError {
+            throw clearError
+        }
         snapshot = nil
+        hasInterruptionMarker = false
     }
 }
 

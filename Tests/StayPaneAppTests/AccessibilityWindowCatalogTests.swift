@@ -181,7 +181,7 @@ import Testing
     let originalWindow = try #require(
         originalCatalog.catalogueWindows(for: application).first
     )
-    let recoveryReference = try #require(originalWindow.recoveryReference)
+    let exactReference = try #require(originalWindow.exactReference)
 
     let relaunchedProvider = FakeAccessibilityWindowProvider(
         descriptors: [
@@ -200,7 +200,7 @@ import Testing
     )
     let relaunchedCatalog = AccessibilityWindowCatalog(
         provider: relaunchedProvider,
-        recoveredWindowReferences: [recoveryReference]
+        exactWindowReferences: [exactReference]
     )
 
     let reconnectedWindow = try #require(
@@ -212,8 +212,8 @@ import Testing
 }
 
 @MainActor
-@Test func aRecoveredIdentityIsConsumedByOnlyOneMatchingWindow() throws {
-    let recoveredIdentifier = WindowIdentifier()
+@Test func aDuplicatedAccessibilityIdentifierIsNotTreatedAsExactIdentity() throws {
+    let persistedIdentifier = WindowIdentifier()
     let application = ApplicationTarget(
         displayName: "Editor",
         bundleIdentifier: "com.example.editor",
@@ -247,9 +247,9 @@ import Testing
     )
     let catalog = AccessibilityWindowCatalog(
         provider: provider,
-        recoveredWindowReferences: [
-            RecoverableWindowReference(
-                windowIdentifier: recoveredIdentifier,
+        exactWindowReferences: [
+            ExactWindowReference(
+                windowIdentifier: persistedIdentifier,
                 bundleIdentifier: application.bundleIdentifier,
                 processIdentifier: 74,
                 accessibilityIdentifier: "duplicated-accessibility-id"
@@ -260,8 +260,12 @@ import Testing
     let windows = try catalog.loadWindows(for: application)
 
     #expect(windows.count == 2)
-    #expect(windows.filter { $0.id == recoveredIdentifier }.count == 1)
+    #expect(windows.allSatisfy { $0.id != persistedIdentifier })
     #expect(Set(windows.map(\.id)).count == 2)
+    #expect(
+        try catalog.catalogueWindows(for: application)
+            .allSatisfy { $0.exactReference == nil }
+    )
 }
 
 @MainActor

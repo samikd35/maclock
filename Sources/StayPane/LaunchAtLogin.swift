@@ -95,7 +95,7 @@ final class LaunchAtLoginModel: ObservableObject {
         case .requiresApproval:
             return "Approve StayPane in System Settings → Login Items so unfinished Sessions can resume after login."
         case .disabled, .unavailable:
-            return "Launch at Login is not currently available, so automatic Session recovery after login is not guaranteed."
+            return "Launch at Login is not currently available, so automatic Session Recovery after login is not guaranteed."
         }
     }
 

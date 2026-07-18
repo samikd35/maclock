@@ -19,12 +19,13 @@ Use short Sessions for sleep, lock, crash, permission, and expired-offline check
 4. Relaunch StayPane before the Fixed End Time. The menu bar and Status Panel must show the original remaining time and immutable Allowlist.
 5. Confirm a surviving exact Window Target remains the same identity even if its title changed while StayPane was unavailable. A closed and reopened same-title window must remain blocked.
 6. Complete or end the Session and confirm only windows StayPane changed are restored. Pre-minimized and user-closed windows must not be reopened.
+7. Try a Window Target from an application that does not expose a unique Accessibility identifier. StayPane must refuse to start, explain that Exact Window Identity is unavailable, and recommend the broader Application Target.
 
 ## Expired while unavailable
 
 1. Start a short Session, Force Quit StayPane, and leave the target applications running until after the Fixed End Time.
 2. Relaunch StayPane. It must restore eligible windows, show the Session as Completed, and must not briefly resume enforcement.
-3. Start another Session to confirm stale recovery data does not return.
+3. Start another Session to confirm stale Recovery data does not return.
 
 ## Accessibility permission loss
 
@@ -44,10 +45,10 @@ Use short Sessions for sleep, lock, crash, permission, and expired-offline check
 
 ## Recovery data cleanup
 
-1. Inspect `~/Library/Application Support/StayPane` during active and reset-pending Sessions. Local recovery files must exist and remain local.
-2. Complete normally, end early, and trigger Interrupted in separate runs. After Restoration succeeds, active Session and changed-window recovery files must be removed.
+1. Inspect `~/Library/Application Support/StayPane` during active and reset-pending Sessions. Local Session Recovery and window-enforcement files must exist and remain local.
+2. Complete normally, end early, and trigger Interrupted in separate runs. After Restoration succeeds, active Session and window-enforcement files must be removed.
 3. Confirm no cloud request, application launch, or window reopening occurs during any Recovery path.
 
 ## Automated companion checks
 
-Run `make test`. The suite covers fixed deadlines, active and reset-pending Recovery, elapsed reset confirmation, normal/early/Interrupted cleanup, expired-offline completion, file round trips, stable exact-window reconnection, and Launch at Login preference behavior using controlled clocks and local adapters.
+Run `make test`. The suite covers Fixed End Times, active and reset-pending Recovery, elapsed reset confirmation, normal/early/Interrupted cleanup, expired-offline completion, file round trips, stable Exact Window Identity reconnection, and Launch at Login preference behavior using controlled clocks and local adapters.

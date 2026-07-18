@@ -52,3 +52,41 @@ import Testing
 
     #expect(try store.load() == nil)
 }
+
+@MainActor
+@Test func sessionRecoveryFileStoreReplacesActiveDataWithInterruptionMarker() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("StayPaneInterruptionMarkerTests")
+        .appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let fileURL = directory.appendingPathComponent("session.json")
+    let store = FileSessionRecoveryStore(fileURL: fileURL)
+    let snapshot = SessionRecoverySnapshot(
+        plan: SessionPlan(
+            duration: SessionDuration(seconds: 60)!,
+            targets: [
+                .application(
+                    ApplicationTarget(
+                        displayName: "Editor",
+                        bundleIdentifier: "com.example.editor"
+                    )
+                )
+            ],
+            preparedAt: Date(timeIntervalSince1970: 2_000)
+        ),
+        startedAt: Date(timeIntervalSince1970: 2_000),
+        endsAt: Date(timeIntervalSince1970: 2_060),
+        phase: .enforcing
+    )
+    try store.save(snapshot)
+
+    try store.markInterrupted(
+        at: Date(timeIntervalSince1970: 2_010),
+        reason: .enforcementUnavailable
+    )
+
+    #expect(FileManager.default.fileExists(atPath: fileURL.path))
+    #expect(try store.load() == nil)
+    try store.save(snapshot)
+    #expect(try store.load() == snapshot)
+}

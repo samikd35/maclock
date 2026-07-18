@@ -3,47 +3,59 @@ import StayPaneCore
 
 @MainActor
 final class FileSessionRecoveryStore: SessionRecoveryPersisting {
-    private let fileURL: URL
-    private let fileManager: FileManager
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
+    private struct InterruptionMarker: Codable {
+        let interruptedAt: Date
+        let reason: SessionInterruptionReason
+    }
+
+    private enum StoredRecovery: Codable {
+        case active(SessionRecoverySnapshot)
+        case interrupted(InterruptionMarker)
+    }
+
+    private let file: LocalJSONFile<StoredRecovery>
 
     init(
         fileURL: URL = FileSessionRecoveryStore.defaultFileURL,
         fileManager: FileManager = .default
     ) {
-        self.fileURL = fileURL
-        self.fileManager = fileManager
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        file = LocalJSONFile(fileURL: fileURL, fileManager: fileManager)
     }
 
     func load() throws -> SessionRecoverySnapshot? {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
+        guard let storedRecovery = try file.load() else {
             return nil
         }
-        return try decoder.decode(
-            SessionRecoverySnapshot.self,
-            from: Data(contentsOf: fileURL)
-        )
+        guard case let .active(snapshot) = storedRecovery else {
+            return nil
+        }
+        return snapshot
     }
 
     func save(_ snapshot: SessionRecoverySnapshot) throws {
-        try fileManager.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try encoder.encode(snapshot).write(to: fileURL, options: .atomic)
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
+        try write(.active(snapshot))
+    }
+
+    func markInterrupted(
+        at interruptedAt: Date,
+        reason: SessionInterruptionReason
+    ) throws {
+        try write(
+            .interrupted(
+                InterruptionMarker(
+                    interruptedAt: interruptedAt,
+                    reason: reason
+                )
+            )
         )
     }
 
+    private func write(_ storedRecovery: StoredRecovery) throws {
+        try file.save(storedRecovery)
+    }
+
     func clear() throws {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            return
-        }
-        try fileManager.removeItem(at: fileURL)
+        try file.clear()
     }
 
     private static var defaultFileURL: URL {

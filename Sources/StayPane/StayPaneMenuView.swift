@@ -477,8 +477,6 @@ struct StayPaneMenuView: View {
         _ reason: SessionInterruptionReason
     ) -> String {
         switch reason {
-        case .accessibilityPermissionLost:
-            "Accessibility permission became unavailable. Restore it before starting another Session."
         case .enforcementUnavailable:
             "The complete Allowlist could no longer be enforced reliably."
         case .recoveryUnavailable:
@@ -572,7 +570,7 @@ struct StayPaneMenuView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else {
-                Text("Enabled by default so logout and restart recovery can begin automatically.")
+                Text("Enabled by default so logout and restart Recovery can begin automatically.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

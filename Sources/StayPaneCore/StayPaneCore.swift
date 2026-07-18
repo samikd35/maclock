@@ -337,7 +337,6 @@ public struct EndedEarlySession: Equatable, Sendable {
 }
 
 public enum SessionInterruptionReason: String, Codable, Equatable, Sendable {
-    case accessibilityPermissionLost
     case enforcementUnavailable
     case recoveryUnavailable
 }
@@ -740,7 +739,10 @@ public final class SessionEngine {
             )
         )
         do {
-            try recoveryStore.clear()
+            try protectInterruptedSession(
+                at: clock.now,
+                reason: reason
+            )
         } catch {
             enforcement.stop()
             throw error
@@ -774,6 +776,7 @@ public final class SessionEngine {
         do {
             try enforcement.resume(allowing: snapshot.plan.targets)
         } catch {
+            let recoveryError = error
             state = .interrupted(
                 InterruptedSession(
                     plan: snapshot.plan,
@@ -786,9 +789,12 @@ public final class SessionEngine {
                     reason: .recoveryUnavailable
                 )
             )
-            try? recoveryStore.clear()
+            try? protectInterruptedSession(
+                at: clock.now,
+                reason: .recoveryUnavailable
+            )
             enforcement.stop()
-            throw error
+            throw recoveryError
         }
         switch snapshot.phase {
         case .enforcing:
@@ -858,6 +864,22 @@ public final class SessionEngine {
         state = .completed(
             CompletedSession(plan: activeSession.plan, completedAt: clock.now)
         )
+    }
+
+    private func protectInterruptedSession(
+        at interruptedAt: Date,
+        reason: SessionInterruptionReason
+    ) throws {
+        do {
+            try recoveryStore.markInterrupted(
+                at: interruptedAt,
+                reason: reason
+            )
+        } catch {
+            try recoveryStore.clear()
+            return
+        }
+        try? recoveryStore.clear()
     }
 
     private func editableDraft() throws -> SessionDraft {

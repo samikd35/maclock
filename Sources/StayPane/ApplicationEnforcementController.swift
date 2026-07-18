@@ -9,7 +9,9 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
     case allowedApplicationsUnavailable([String])
     case allowedWindowsUnavailable([String])
     case windowRestorationPending(Int)
-    case windowRecoveryUnavailable
+    case exactWindowIdentityUnavailable([String])
+    case windowRestorationUnavailable(String)
+    case windowEnforcementPersistenceUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -23,15 +25,19 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
             "These allowed windows closed before the session started: \(windowTitles.joined(separator: ", ")). Choose their reopened windows again."
         case let .windowRestorationPending(count):
             "StayPane is still restoring \(count) window(s) from the previous session."
-        case .windowRecoveryUnavailable:
-            "StayPane could not load or save the window state required for reliable recovery."
+        case let .exactWindowIdentityUnavailable(windowTitles):
+            "These Window Targets do not expose a stable Exact Window Identity: \(windowTitles.joined(separator: ", ")). Choose their Application Targets instead."
+        case let .windowRestorationUnavailable(windowTitle):
+            "StayPane cannot persist the Restoration identity for \(windowTitle), so reliable enforcement cannot continue."
+        case .windowEnforcementPersistenceUnavailable:
+            "StayPane could not load or save the exact-window enforcement state required for reliable Recovery and Restoration."
         }
     }
 }
 
 @MainActor
 final class ApplicationEnforcementController: NSObject, SessionEnforcing {
-    private struct RecoveryProcessKey: Hashable {
+    private struct ProcessKey: Hashable {
         let bundleIdentifier: String
         let processIdentifier: Int32
     }
@@ -42,7 +48,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     var onRestorationRecovered: (() -> Void)?
 
     var pendingRestorationCount: Int {
-        max(restorationTracker.pendingCount, recoveryReferences.count)
+        max(restorationTracker.pendingCount, restorationReferences.count)
     }
 
     private let permissionClient: any AccessibilityPermissionChecking
@@ -51,14 +57,16 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     private let notificationCenter: NotificationCenter
     private let windowOperator: any AccessibilityWindowOperating
     private let restorationTracker: WindowRestorationTracker
-    private let windowRecoveryStore: any WindowRecoveryPersisting
+    private let windowEnforcementStore: any WindowEnforcementPersisting
+    private let workspaceApplications: any WorkspaceApplicationAccessing
     private var allowedTargets: [SessionTarget] = []
     private var windowPolicy = WindowAllowlistPolicy(targets: [])
     private var isObserving = false
     private var lastNoticeUptime: TimeInterval = -.infinity
     private var lastFullScanUptime: TimeInterval = -.infinity
-    private var recoveryReferences: [WindowIdentifier: RecoverableWindowReference]
-    private var windowRecoveryLoadFailed = false
+    private var allowedWindowReferences: [WindowIdentifier: ExactWindowReference]
+    private var restorationReferences: [WindowIdentifier: ExactWindowReference]
+    private var windowEnforcementLoadFailed = false
 
     private static let fullScanInterval: TimeInterval = 0.25
 
@@ -68,27 +76,43 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         windowCatalog: AccessibilityWindowCatalog = AccessibilityWindowCatalog(),
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator(),
-        windowRecoveryStore: any WindowRecoveryPersisting = FileWindowRecoveryStore()
+        windowEnforcementStore: any WindowEnforcementPersisting = FileWindowEnforcementStore(),
+        workspaceApplications: any WorkspaceApplicationAccessing = SystemWorkspaceApplicationAccess()
     ) {
         self.permissionClient = permissionClient
         self.availabilityResolver = availabilityResolver
         self.windowCatalog = windowCatalog
         self.notificationCenter = notificationCenter
         self.windowOperator = windowOperator
-        self.windowRecoveryStore = windowRecoveryStore
+        self.windowEnforcementStore = windowEnforcementStore
+        self.workspaceApplications = workspaceApplications
         restorationTracker = WindowRestorationTracker(operatorClient: windowOperator)
-        let loadedReferences: [RecoverableWindowReference]
+        let loadedSnapshot: WindowEnforcementSnapshot
         do {
-            loadedReferences = try windowRecoveryStore.load()
+            loadedSnapshot = try windowEnforcementStore.load()
+                ?? WindowEnforcementSnapshot(
+                    allowedWindowReferences: [],
+                    restorationReferences: []
+                )
         } catch {
-            loadedReferences = []
-            windowRecoveryLoadFailed = true
+            loadedSnapshot = WindowEnforcementSnapshot(
+                allowedWindowReferences: [],
+                restorationReferences: []
+            )
+            windowEnforcementLoadFailed = true
         }
-        recoveryReferences = [:]
-        for reference in loadedReferences {
-            recoveryReferences[reference.windowIdentifier] = reference
+        allowedWindowReferences = [:]
+        for reference in loadedSnapshot.allowedWindowReferences {
+            allowedWindowReferences[reference.windowIdentifier] = reference
         }
-        windowCatalog.registerRecoveredWindowReferences(loadedReferences)
+        restorationReferences = [:]
+        for reference in loadedSnapshot.restorationReferences {
+            restorationReferences[reference.windowIdentifier] = reference
+        }
+        windowCatalog.registerExactWindowReferences(
+            loadedSnapshot.allowedWindowReferences
+                + loadedSnapshot.restorationReferences
+        )
         super.init()
     }
 
@@ -104,8 +128,8 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         allowing targets: [SessionTarget],
         isRecovery: Bool
     ) throws {
-        guard !windowRecoveryLoadFailed else {
-            throw ApplicationEnforcementError.windowRecoveryUnavailable
+        guard !windowEnforcementLoadFailed else {
+            throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
         }
         let applicationTargets = targets.compactMap { target -> ApplicationTarget? in
             guard case let .application(application) = target else {
@@ -133,15 +157,19 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                 )
             }
         }
-        try resolvePersistedRestorationWindows()
+        try resolvePersistedWindowReferences()
         if !isRecovery, pendingRestorationCount > 0 {
             let outcome = restorationTracker.restorePendingWindows()
-            try removeResolvedRecoveryReferences()
+            try removeResolvedRestorationReferences()
             guard outcome.pendingCount == 0 else {
                 throw ApplicationEnforcementError.windowRestorationPending(
                     outcome.pendingCount
                 )
             }
+        }
+        if !isRecovery {
+            allowedWindowReferences = try exactWindowReferences(for: targets)
+            try persistWindowEnforcementSnapshot()
         }
 
         allowedTargets = targets
@@ -185,13 +213,16 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         lastFullScanUptime = -.infinity
 
         do {
-            try resolvePersistedRestorationWindows()
+            try resolvePersistedWindowReferences()
+            allowedWindowReferences.removeAll()
             let outcome = restorationTracker.restorePendingWindows()
-            try removeResolvedRecoveryReferences()
-            if outcome.pendingCount > 0 || !recoveryReferences.isEmpty {
+            try removeResolvedRestorationReferences()
+            if outcome.pendingCount > 0 || !restorationReferences.isEmpty {
                 onRestorationFailure?(pendingRestorationCount)
             }
         } catch {
+            allowedWindowReferences.removeAll()
+            try? persistWindowEnforcementSnapshot()
             onRestorationFailure?(pendingRestorationCount)
         }
     }
@@ -202,10 +233,10 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         }
 
         do {
-            try resolvePersistedRestorationWindows()
+            try resolvePersistedWindowReferences()
             let outcome = restorationTracker.restorePendingWindows()
-            try removeResolvedRecoveryReferences()
-            if outcome.pendingCount == 0, recoveryReferences.isEmpty {
+            try removeResolvedRestorationReferences()
+            if outcome.pendingCount == 0, restorationReferences.isEmpty {
                 onRestorationRecovered?()
             }
         } catch {
@@ -300,12 +331,12 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
     private func enforceCurrentWindows() throws {
         lastFullScanUptime = ProcessInfo.processInfo.systemUptime
-        let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?
+        let frontmostProcessIdentifier = workspaceApplications.frontmostApplication?
             .processIdentifier
         var refocusTarget: TargetIdentifier?
         var blockedNotice: String?
 
-        for application in NSWorkspace.shared.runningApplications where
+        for application in workspaceApplications.runningApplications where
             application.activationPolicy == .regular
                 && !application.isTerminated
                 && application.processIdentifier != ProcessInfo.processInfo.processIdentifier
@@ -376,21 +407,29 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             break
         }
 
+        guard let exactReference = window.exactReference else {
+            throw ApplicationEnforcementError.windowRestorationUnavailable(
+                window.target.title
+            )
+        }
+        restorationReferences[exactReference.windowIdentifier] = exactReference
+        do {
+            try persistWindowEnforcementSnapshot()
+        } catch {
+            restorationReferences.removeValue(
+                forKey: exactReference.windowIdentifier
+            )
+            throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
+        }
+
         switch windowOperator.setMinimized(true, for: window.element) {
         case .success:
             restorationTracker.recordChangedWindow(window.element)
-            if let recoveryReference = window.recoveryReference {
-                recoveryReferences[recoveryReference.windowIdentifier]
-                    = recoveryReference
-                do {
-                    try persistRecoveryReferences()
-                } catch {
-                    throw ApplicationEnforcementError.windowRecoveryUnavailable
-                }
-            }
         case .unavailable:
+            try discardRestorationReference(exactReference.windowIdentifier)
             return
         case .failed:
+            try discardRestorationReference(exactReference.windowIdentifier)
             throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
         }
     }
@@ -436,7 +475,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         for target: ApplicationTarget
     ) -> NSRunningApplication? {
         let preferredApplication = target.processIdentifier.flatMap {
-            NSRunningApplication(processIdentifier: $0)
+            workspaceApplications.application(processIdentifier: $0)
         }
         if let preferredApplication,
            !preferredApplication.isTerminated,
@@ -445,8 +484,8 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             return preferredApplication
         }
 
-        return NSRunningApplication.runningApplications(
-            withBundleIdentifier: target.bundleIdentifier
+        return workspaceApplications.runningApplications(
+            bundleIdentifier: target.bundleIdentifier
         ).first(where: { !$0.isTerminated })
     }
 
@@ -471,25 +510,79 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         onBlockedApplication?(message)
     }
 
-    private func resolvePersistedRestorationWindows() throws {
+    private func exactWindowReferences(
+        for targets: [SessionTarget]
+    ) throws -> [WindowIdentifier: ExactWindowReference] {
+        let windowTargets = targets.compactMap { target -> WindowTarget? in
+            guard case let .window(window) = target else {
+                return nil
+            }
+            return window
+        }
+        var references: [WindowIdentifier: ExactWindowReference] = [:]
+        var unavailableTitles: [String] = []
+        var unstableTitles: [String] = []
+
+        for windowTarget in windowTargets {
+            let windows: [CataloguedAccessibilityWindow]
+            do {
+                windows = try windowCatalog.catalogueWindows(
+                    for: windowTarget.application
+                )
+            } catch {
+                unavailableTitles.append(windowTarget.title)
+                continue
+            }
+            guard let window = windows.first(where: {
+                $0.target.id == windowTarget.id
+            }) else {
+                unavailableTitles.append(windowTarget.title)
+                continue
+            }
+            guard let exactReference = window.exactReference else {
+                unstableTitles.append(windowTarget.title)
+                continue
+            }
+            references[windowTarget.id] = exactReference
+        }
+
+        guard unavailableTitles.isEmpty else {
+            throw ApplicationEnforcementError.allowedWindowsUnavailable(
+                unavailableTitles
+            )
+        }
+        guard unstableTitles.isEmpty else {
+            throw ApplicationEnforcementError.exactWindowIdentityUnavailable(
+                unstableTitles
+            )
+        }
+        return references
+    }
+
+    private func resolvePersistedWindowReferences() throws {
+        let allReferences = Array(allowedWindowReferences.values)
+            + Array(restorationReferences.values)
         let referencesByProcess = Dictionary(
-            grouping: recoveryReferences.values,
+            grouping: allReferences,
             by: {
-                RecoveryProcessKey(
+                ProcessKey(
                     bundleIdentifier: $0.bundleIdentifier,
                     processIdentifier: $0.processIdentifier
                 )
             }
         )
         for (processKey, references) in referencesByProcess {
-            guard let runningApplication = NSRunningApplication(
+            guard let runningApplication = workspaceApplications.application(
                 processIdentifier: processKey.processIdentifier
             ),
             !runningApplication.isTerminated,
             runningApplication.bundleIdentifier == processKey.bundleIdentifier
             else {
                 for reference in references {
-                    recoveryReferences.removeValue(
+                    allowedWindowReferences.removeValue(
+                        forKey: reference.windowIdentifier
+                    )
+                    restorationReferences.removeValue(
                         forKey: reference.windowIdentifier
                     )
                 }
@@ -501,10 +594,10 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             do {
                 windows = try windowCatalog.catalogueWindows(for: application)
             } catch {
-                throw ApplicationEnforcementError.windowRecoveryUnavailable
+                throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
             }
             for window in windows
-                where recoveryReferences[window.target.id] != nil
+                where restorationReferences[window.target.id] != nil
             {
                 restorationTracker.recordChangedWindow(window.element)
             }
@@ -512,36 +605,56 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             for reference in references
                 where !availableIdentifiers.contains(reference.windowIdentifier)
             {
-                recoveryReferences.removeValue(
+                allowedWindowReferences.removeValue(
+                    forKey: reference.windowIdentifier
+                )
+                restorationReferences.removeValue(
                     forKey: reference.windowIdentifier
                 )
             }
         }
-        try persistRecoveryReferences()
+        try persistWindowEnforcementSnapshot()
     }
 
-    private func removeResolvedRecoveryReferences() throws {
-        for identifier in Array(recoveryReferences.keys) {
+    private func removeResolvedRestorationReferences() throws {
+        for identifier in Array(restorationReferences.keys) {
             guard let element = windowCatalog.element(for: identifier) else {
-                recoveryReferences.removeValue(forKey: identifier)
+                restorationReferences.removeValue(forKey: identifier)
                 continue
             }
             switch windowOperator.minimizedState(of: element) {
             case .minimized(true), .failed:
                 continue
             case .minimized(false), .unavailable:
-                recoveryReferences.removeValue(forKey: identifier)
+                restorationReferences.removeValue(forKey: identifier)
             }
         }
-        try persistRecoveryReferences()
+        try persistWindowEnforcementSnapshot()
     }
 
-    private func persistRecoveryReferences() throws {
-        try windowRecoveryStore.save(
-            recoveryReferences.values.sorted {
-                $0.windowIdentifier.rawValue.uuidString
-                    < $1.windowIdentifier.rawValue.uuidString
-            }
+    private func discardRestorationReference(
+        _ identifier: WindowIdentifier
+    ) throws {
+        restorationReferences.removeValue(forKey: identifier)
+        do {
+            try persistWindowEnforcementSnapshot()
+        } catch {
+            throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
+        }
+    }
+
+    private func persistWindowEnforcementSnapshot() throws {
+        try windowEnforcementStore.save(
+            WindowEnforcementSnapshot(
+                allowedWindowReferences: allowedWindowReferences.values.sorted {
+                    $0.windowIdentifier.rawValue.uuidString
+                        < $1.windowIdentifier.rawValue.uuidString
+                },
+                restorationReferences: restorationReferences.values.sorted {
+                    $0.windowIdentifier.rawValue.uuidString
+                        < $1.windowIdentifier.rawValue.uuidString
+                }
+            )
         )
     }
 }

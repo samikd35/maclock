@@ -89,7 +89,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 engine.beginConfiguration(duration: initialDuration)
                 startupNotice = nil
             case .resumed:
-                startupNotice = "StayPane resumed the unfinished Session from its fixed end time."
+                startupNotice = "StayPane resumed the unfinished Session from its Fixed End Time."
             case .completedWhileUnavailable:
                 startupNotice = "The Session ended while StayPane was unavailable. Restoration cleanup is complete."
             }
@@ -100,7 +100,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 try? sessionRecoveryStore.clear()
                 enforcement.stop()
                 engine.beginConfiguration(duration: initialDuration)
-                startupNotice = "StayPane discarded unreadable recovery data and restored what remained controllable."
+                startupNotice = "StayPane discarded unreadable Recovery data and performed Restoration for what remained controllable."
             }
         }
         durationSeconds = durationFromEngine()
@@ -650,16 +650,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     private func failOpen(after error: Error) {
-        let reason: SessionInterruptionReason
-        if let enforcementError = error as? ApplicationEnforcementError,
-           enforcementError == .accessibilityPermissionMissing
-        {
-            reason = .accessibilityPermissionLost
-        } else {
-            reason = .enforcementUnavailable
-        }
         do {
-            try engine.interrupt(reason: reason)
+            try engine.interrupt(reason: .enforcementUnavailable)
         } catch {
             enforcement.stop()
         }
@@ -669,7 +661,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         quitCoordinator.cancelDeferredQuit()
         synchronizeWithEngine()
         showNotice(
-            "Session Interrupted. StayPane failed open and restored what remained controllable: \(error.localizedDescription)"
+            "Session Interrupted. StayPane used Fail Open and performed Restoration for what remained controllable: \(error.localizedDescription)"
         )
     }
 

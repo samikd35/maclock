@@ -168,12 +168,12 @@ struct CataloguedAccessibilityWindow {
     let element: AXUIElement
     let observation: ObservedWindow
     let isFocused: Bool
-    let recoveryReference: RecoverableWindowReference?
+    let exactReference: ExactWindowReference?
 }
 
 @MainActor
 final class AccessibilityWindowCatalog {
-    private struct RecoveryKey: Hashable {
+    private struct PersistentIdentityKey: Hashable {
         let bundleIdentifier: String
         let processIdentifier: Int32
         let accessibilityIdentifier: String
@@ -189,23 +189,23 @@ final class AccessibilityWindowCatalog {
     private var registry: [RegistryEntry] = []
     private var latestDescriptors: [WindowIdentifier: AccessibilityWindowDescriptor] = [:]
     private var latestProcessIdentifiers: [WindowIdentifier: Int32] = [:]
-    private var recoveredIdentifiers: [RecoveryKey: WindowIdentifier]
+    private var reconnectedIdentifiers: [PersistentIdentityKey: WindowIdentifier]
 
     init(
         provider: any AccessibilityWindowProviding = SystemAccessibilityWindowProvider(),
-        recoveredWindowReferences: [RecoverableWindowReference] = []
+        exactWindowReferences: [ExactWindowReference] = []
     ) {
         self.provider = provider
-        recoveredIdentifiers = [:]
-        registerRecoveredWindowReferences(recoveredWindowReferences)
+        reconnectedIdentifiers = [:]
+        registerExactWindowReferences(exactWindowReferences)
     }
 
-    func registerRecoveredWindowReferences(
-        _ references: [RecoverableWindowReference]
+    func registerExactWindowReferences(
+        _ references: [ExactWindowReference]
     ) {
         for reference in references {
-            recoveredIdentifiers[
-                RecoveryKey(
+            reconnectedIdentifiers[
+                PersistentIdentityKey(
                     bundleIdentifier: reference.bundleIdentifier,
                     processIdentifier: reference.processIdentifier,
                     accessibilityIdentifier: reference.accessibilityIdentifier
@@ -254,11 +254,18 @@ final class AccessibilityWindowCatalog {
                 latestProcessIdentifiers.removeValue(forKey: $0)
             }
 
+        let accessibilityIdentifierCounts = Dictionary(
+            grouping: descriptors.compactMap(\.accessibilityIdentifier),
+            by: { $0 }
+        ).mapValues(\.count)
         let descriptorIdentifiers = descriptors.map { descriptor in
             identifier(
                 for: descriptor,
                 processIdentifier: processIdentifier,
-                bundleIdentifier: application.bundleIdentifier
+                bundleIdentifier: application.bundleIdentifier,
+                persistentIdentityIsUnique: descriptor.accessibilityIdentifier.map {
+                    accessibilityIdentifierCounts[$0] == 1
+                } ?? false
             )
         }
         for (identifier, descriptor) in zip(descriptorIdentifiers, descriptors) {
@@ -287,8 +294,11 @@ final class AccessibilityWindowCatalog {
                         )
                     ),
                     isFocused: descriptor.isFocused,
-                    recoveryReference: descriptor.accessibilityIdentifier.map {
-                        RecoverableWindowReference(
+                    exactReference: descriptor.accessibilityIdentifier.flatMap {
+                        guard accessibilityIdentifierCounts[$0] == 1 else {
+                            return nil
+                        }
+                        return ExactWindowReference(
                             windowIdentifier: identifier,
                             bundleIdentifier: application.bundleIdentifier,
                             processIdentifier: processIdentifier,
@@ -321,7 +331,8 @@ final class AccessibilityWindowCatalog {
     private func identifier(
         for descriptor: AccessibilityWindowDescriptor,
         processIdentifier: Int32,
-        bundleIdentifier: String
+        bundleIdentifier: String,
+        persistentIdentityIsUnique: Bool
     ) -> WindowIdentifier {
         if let existing = registry.first(where: {
             $0.processIdentifier == processIdentifier
@@ -330,16 +341,20 @@ final class AccessibilityWindowCatalog {
             return existing.identifier
         }
 
-        let recoveredIdentifier = descriptor.accessibilityIdentifier.flatMap {
-            recoveredIdentifiers.removeValue(
-                forKey: RecoveryKey(
-                    bundleIdentifier: bundleIdentifier,
-                    processIdentifier: processIdentifier,
-                    accessibilityIdentifier: $0
+        let reconnectedIdentifier: WindowIdentifier? = descriptor
+            .accessibilityIdentifier.flatMap {
+                guard persistentIdentityIsUnique else {
+                    return nil
+                }
+                return reconnectedIdentifiers.removeValue(
+                    forKey: PersistentIdentityKey(
+                        bundleIdentifier: bundleIdentifier,
+                        processIdentifier: processIdentifier,
+                        accessibilityIdentifier: $0
+                    )
                 )
-            )
-        }
-        let identifier = recoveredIdentifier ?? WindowIdentifier()
+            }
+        let identifier = reconnectedIdentifier ?? WindowIdentifier()
         registry.append(
             RegistryEntry(
                 identifier: identifier,
