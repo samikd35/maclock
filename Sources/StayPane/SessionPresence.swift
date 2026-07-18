@@ -6,10 +6,11 @@ enum SessionPresence: Equatable {
     case resetPending(focusRemainingSeconds: Int, resetRemainingSeconds: Int)
     case completed
     case endedEarly
+    case interrupted
 
     var isEnforcing: Bool {
         switch self {
-        case .inactive, .completed, .endedEarly:
+        case .inactive, .completed, .endedEarly, .interrupted:
             false
         case .active, .resetPending:
             true
@@ -29,6 +30,8 @@ enum SessionPresence: Equatable {
             "Session Complete"
         case .endedEarly:
             "Ended Early"
+        case .interrupted:
+            "Interrupted"
         }
     }
 }

@@ -5,7 +5,8 @@ import SwiftUI
 final class StayPanePanelController: NSWindowController {
     init(
         model: StayPaneModel,
-        floatingTimerPreferences: FloatingTimerPreferenceModel
+        floatingTimerPreferences: FloatingTimerPreferenceModel,
+        launchAtLoginModel: LaunchAtLoginModel
     ) {
         let panel = NSPanel(
             contentRect: CGRect(x: 0, y: 0, width: 390, height: 540),
@@ -22,7 +23,8 @@ final class StayPanePanelController: NSWindowController {
         panel.contentView = NSHostingView(
             rootView: StayPaneMenuView(
                 model: model,
-                floatingTimerPreferences: floatingTimerPreferences
+                floatingTimerPreferences: floatingTimerPreferences,
+                launchAtLoginModel: launchAtLoginModel
             )
         )
         panel.center()

@@ -7,17 +7,20 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
     private var isSystemPowerOffPending = false
     private weak var interfaceModel: StayPaneModel?
     private weak var floatingTimerPreferences: FloatingTimerPreferenceModel?
+    private weak var launchAtLoginModel: LaunchAtLoginModel?
     private var floatingTimerController: FloatingTimerController?
     private var panelController: StayPanePanelController?
     private var openPanelShortcutController: OpenPanelShortcutController?
 
     func configure(
         model: StayPaneModel,
-        floatingTimerPreferences: FloatingTimerPreferenceModel
+        floatingTimerPreferences: FloatingTimerPreferenceModel,
+        launchAtLoginModel: LaunchAtLoginModel
     ) {
         self.model = model
         interfaceModel = model
         self.floatingTimerPreferences = floatingTimerPreferences
+        self.launchAtLoginModel = launchAtLoginModel
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -43,13 +46,17 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let interfaceModel, let floatingTimerPreferences else {
+        guard let interfaceModel,
+              let floatingTimerPreferences,
+              let launchAtLoginModel
+        else {
             return
         }
 
         let panelController = StayPanePanelController(
             model: interfaceModel,
-            floatingTimerPreferences: floatingTimerPreferences
+            floatingTimerPreferences: floatingTimerPreferences,
+            launchAtLoginModel: launchAtLoginModel
         )
         self.panelController = panelController
         floatingTimerController = FloatingTimerController(
@@ -79,17 +86,21 @@ struct StayPaneApp: App {
     @NSApplicationDelegateAdaptor(StayPaneAppDelegate.self) private var appDelegate
     @StateObject private var model: StayPaneModel
     @StateObject private var floatingTimerPreferences: FloatingTimerPreferenceModel
+    @StateObject private var launchAtLoginModel: LaunchAtLoginModel
 
     init() {
         let model = StayPaneModel()
         let floatingTimerPreferences = FloatingTimerPreferenceModel()
+        let launchAtLoginModel = LaunchAtLoginModel()
         _model = StateObject(wrappedValue: model)
         _floatingTimerPreferences = StateObject(
             wrappedValue: floatingTimerPreferences
         )
+        _launchAtLoginModel = StateObject(wrappedValue: launchAtLoginModel)
         appDelegate.configure(
             model: model,
-            floatingTimerPreferences: floatingTimerPreferences
+            floatingTimerPreferences: floatingTimerPreferences,
+            launchAtLoginModel: launchAtLoginModel
         )
     }
 
@@ -97,7 +108,8 @@ struct StayPaneApp: App {
         MenuBarExtra {
             StayPaneMenuView(
                 model: model,
-                floatingTimerPreferences: floatingTimerPreferences
+                floatingTimerPreferences: floatingTimerPreferences,
+                launchAtLoginModel: launchAtLoginModel
             )
         } label: {
             Label(model.menuBarTitle, systemImage: "rectangle.inset.filled.and.person.filled")

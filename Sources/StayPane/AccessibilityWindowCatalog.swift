@@ -25,6 +25,29 @@ struct AccessibilityWindowDescriptor {
     let isFocused: Bool
     let parentElement: AXUIElement?
     let frame: CGRect?
+    let accessibilityIdentifier: String?
+
+    init(
+        element: AXUIElement,
+        title: String,
+        role: String?,
+        subrole: String?,
+        isModal: Bool,
+        isFocused: Bool,
+        parentElement: AXUIElement?,
+        frame: CGRect?,
+        accessibilityIdentifier: String? = nil
+    ) {
+        self.element = element
+        self.title = title
+        self.role = role
+        self.subrole = subrole
+        self.isModal = isModal
+        self.isFocused = isFocused
+        self.parentElement = parentElement
+        self.frame = frame
+        self.accessibilityIdentifier = accessibilityIdentifier
+    }
 }
 
 @MainActor
@@ -65,7 +88,11 @@ final class SystemAccessibilityWindowProvider: AccessibilityWindowProviding {
                 isModal: boolValue(kAXModalAttribute, of: window) ?? false,
                 isFocused: focusedWindow.map { CFEqual($0, window) } ?? false,
                 parentElement: elementValue(kAXParentAttribute, of: window),
-                frame: frame(of: window)
+                frame: frame(of: window),
+                accessibilityIdentifier: stringValue(
+                    kAXIdentifierAttribute,
+                    of: window
+                )
             )
         }
     }
@@ -141,10 +168,17 @@ struct CataloguedAccessibilityWindow {
     let element: AXUIElement
     let observation: ObservedWindow
     let isFocused: Bool
+    let recoveryReference: RecoverableWindowReference?
 }
 
 @MainActor
 final class AccessibilityWindowCatalog {
+    private struct RecoveryKey: Hashable {
+        let bundleIdentifier: String
+        let processIdentifier: Int32
+        let accessibilityIdentifier: String
+    }
+
     private struct RegistryEntry {
         let identifier: WindowIdentifier
         let processIdentifier: Int32
@@ -155,9 +189,29 @@ final class AccessibilityWindowCatalog {
     private var registry: [RegistryEntry] = []
     private var latestDescriptors: [WindowIdentifier: AccessibilityWindowDescriptor] = [:]
     private var latestProcessIdentifiers: [WindowIdentifier: Int32] = [:]
+    private var recoveredIdentifiers: [RecoveryKey: WindowIdentifier]
 
-    init(provider: any AccessibilityWindowProviding = SystemAccessibilityWindowProvider()) {
+    init(
+        provider: any AccessibilityWindowProviding = SystemAccessibilityWindowProvider(),
+        recoveredWindowReferences: [RecoverableWindowReference] = []
+    ) {
         self.provider = provider
+        recoveredIdentifiers = [:]
+        registerRecoveredWindowReferences(recoveredWindowReferences)
+    }
+
+    func registerRecoveredWindowReferences(
+        _ references: [RecoverableWindowReference]
+    ) {
+        for reference in references {
+            recoveredIdentifiers[
+                RecoveryKey(
+                    bundleIdentifier: reference.bundleIdentifier,
+                    processIdentifier: reference.processIdentifier,
+                    accessibilityIdentifier: reference.accessibilityIdentifier
+                )
+            ] = reference.windowIdentifier
+        }
     }
 
     func loadWindows(
@@ -201,7 +255,11 @@ final class AccessibilityWindowCatalog {
             }
 
         let descriptorIdentifiers = descriptors.map { descriptor in
-            identifier(for: descriptor.element, processIdentifier: processIdentifier)
+            identifier(
+                for: descriptor,
+                processIdentifier: processIdentifier,
+                bundleIdentifier: application.bundleIdentifier
+            )
         }
         for (identifier, descriptor) in zip(descriptorIdentifiers, descriptors) {
             latestDescriptors[identifier] = descriptor
@@ -228,7 +286,15 @@ final class AccessibilityWindowCatalog {
                             bundleIdentifier: application.bundleIdentifier
                         )
                     ),
-                    isFocused: descriptor.isFocused
+                    isFocused: descriptor.isFocused,
+                    recoveryReference: descriptor.accessibilityIdentifier.map {
+                        RecoverableWindowReference(
+                            windowIdentifier: identifier,
+                            bundleIdentifier: application.bundleIdentifier,
+                            processIdentifier: processIdentifier,
+                            accessibilityIdentifier: $0
+                        )
+                    }
                 )
             }
             .sorted {
@@ -253,21 +319,32 @@ final class AccessibilityWindowCatalog {
     }
 
     private func identifier(
-        for element: AXUIElement,
-        processIdentifier: Int32
+        for descriptor: AccessibilityWindowDescriptor,
+        processIdentifier: Int32,
+        bundleIdentifier: String
     ) -> WindowIdentifier {
         if let existing = registry.first(where: {
-            $0.processIdentifier == processIdentifier && CFEqual($0.element, element)
+            $0.processIdentifier == processIdentifier
+                && CFEqual($0.element, descriptor.element)
         }) {
             return existing.identifier
         }
 
-        let identifier = WindowIdentifier()
+        let recoveredIdentifier = descriptor.accessibilityIdentifier.flatMap {
+            recoveredIdentifiers.removeValue(
+                forKey: RecoveryKey(
+                    bundleIdentifier: bundleIdentifier,
+                    processIdentifier: processIdentifier,
+                    accessibilityIdentifier: $0
+                )
+            )
+        }
+        let identifier = recoveredIdentifier ?? WindowIdentifier()
         registry.append(
             RegistryEntry(
                 identifier: identifier,
                 processIdentifier: processIdentifier,
-                element: element
+                element: descriptor.element
             )
         )
         return identifier

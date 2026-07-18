@@ -156,6 +156,115 @@ import Testing
 }
 
 @MainActor
+@Test func survivingWindowIdentityReconnectsWithoutMatchingItsTitle() throws {
+    let application = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 73
+    )
+    let originalProvider = FakeAccessibilityWindowProvider(
+        descriptors: [
+            AccessibilityWindowDescriptor(
+                element: AXUIElementCreateApplication(731),
+                title: "Original title",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: true,
+                parentElement: nil,
+                frame: .zero,
+                accessibilityIdentifier: "editor-window-73"
+            )
+        ]
+    )
+    let originalCatalog = AccessibilityWindowCatalog(provider: originalProvider)
+    let originalWindow = try #require(
+        originalCatalog.catalogueWindows(for: application).first
+    )
+    let recoveryReference = try #require(originalWindow.recoveryReference)
+
+    let relaunchedProvider = FakeAccessibilityWindowProvider(
+        descriptors: [
+            AccessibilityWindowDescriptor(
+                element: AXUIElementCreateApplication(732),
+                title: "Renamed while StayPane was closed",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: true,
+                parentElement: nil,
+                frame: .zero,
+                accessibilityIdentifier: "editor-window-73"
+            )
+        ]
+    )
+    let relaunchedCatalog = AccessibilityWindowCatalog(
+        provider: relaunchedProvider,
+        recoveredWindowReferences: [recoveryReference]
+    )
+
+    let reconnectedWindow = try #require(
+        relaunchedCatalog.loadWindows(for: application).first
+    )
+
+    #expect(reconnectedWindow.id == originalWindow.target.id)
+    #expect(reconnectedWindow.title != originalWindow.target.title)
+}
+
+@MainActor
+@Test func aRecoveredIdentityIsConsumedByOnlyOneMatchingWindow() throws {
+    let recoveredIdentifier = WindowIdentifier()
+    let application = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 74
+    )
+    let provider = FakeAccessibilityWindowProvider(
+        descriptors: [
+            AccessibilityWindowDescriptor(
+                element: AXUIElementCreateApplication(741),
+                title: "First",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: true,
+                parentElement: nil,
+                frame: .zero,
+                accessibilityIdentifier: "duplicated-accessibility-id"
+            ),
+            AccessibilityWindowDescriptor(
+                element: AXUIElementCreateApplication(742),
+                title: "Second",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: false,
+                parentElement: nil,
+                frame: .zero,
+                accessibilityIdentifier: "duplicated-accessibility-id"
+            )
+        ]
+    )
+    let catalog = AccessibilityWindowCatalog(
+        provider: provider,
+        recoveredWindowReferences: [
+            RecoverableWindowReference(
+                windowIdentifier: recoveredIdentifier,
+                bundleIdentifier: application.bundleIdentifier,
+                processIdentifier: 74,
+                accessibilityIdentifier: "duplicated-accessibility-id"
+            )
+        ]
+    )
+
+    let windows = try catalog.loadWindows(for: application)
+
+    #expect(windows.count == 2)
+    #expect(windows.filter { $0.id == recoveredIdentifier }.count == 1)
+    #expect(Set(windows.map(\.id)).count == 2)
+}
+
+@MainActor
 private final class FakeAccessibilityWindowProvider: AccessibilityWindowProviding {
     var descriptors: [AccessibilityWindowDescriptor]
 

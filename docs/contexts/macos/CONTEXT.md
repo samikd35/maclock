@@ -39,3 +39,7 @@ _Avoid_: Overlay, webpage timer, widget
 **Open-Panel Shortcut**:
 The sole global shortcut, whose only effect is to reveal the Status Panel.
 _Avoid_: Action shortcut, reset shortcut
+
+**Launch at Login**:
+The user-controlled macOS registration that lets StayPane begin Recovery automatically after logout or restart.
+_Avoid_: Autostart, startup helper

@@ -15,6 +15,7 @@ import Testing
 @Test func menuBarPresenceProvidesNotificationIndependentCompletionFeedback() {
     #expect(SessionPresence.completed.menuBarTitle == "Session Complete")
     #expect(SessionPresence.endedEarly.menuBarTitle == "Ended Early")
+    #expect(SessionPresence.interrupted.menuBarTitle == "Interrupted")
 }
 
 @Test func onlyEnforcedSessionPresenceDisplaysTheFloatingTimer() {
@@ -28,4 +29,5 @@ import Testing
     )
     #expect(!SessionPresence.completed.isEnforcing)
     #expect(!SessionPresence.endedEarly.isEnforcing)
+    #expect(!SessionPresence.interrupted.isEnforcing)
 }

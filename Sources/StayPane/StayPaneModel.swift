@@ -53,7 +53,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             availabilityResolver: applicationCatalog,
             windowCatalog: windowCatalog
         )
-        engine = SessionEngine(clock: SystemSessionClock(), enforcement: enforcement)
+        let sessionRecoveryStore = FileSessionRecoveryStore()
+        engine = SessionEngine(
+            clock: SystemSessionClock(),
+            enforcement: enforcement,
+            recoveryStore: sessionRecoveryStore
+        )
 
         let storedDuration = defaults.integer(forKey: Self.lastDurationKey)
         let initialDuration = SessionDuration(seconds: storedDuration) ?? .default
@@ -76,12 +81,37 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             self?.showNotice("No pending window restorations remain.")
         }
 
-        engine.beginConfiguration(duration: initialDuration)
+        let startupNotice: String?
+        do {
+            switch try engine.recover() {
+            case .none:
+                enforcement.stop()
+                engine.beginConfiguration(duration: initialDuration)
+                startupNotice = nil
+            case .resumed:
+                startupNotice = "StayPane resumed the unfinished Session from its fixed end time."
+            case .completedWhileUnavailable:
+                startupNotice = "The Session ended while StayPane was unavailable. Restoration cleanup is complete."
+            }
+        } catch {
+            if case .interrupted = engine.state {
+                startupNotice = "The saved Session could not be resumed safely and was marked Interrupted."
+            } else {
+                try? sessionRecoveryStore.clear()
+                enforcement.stop()
+                engine.beginConfiguration(duration: initialDuration)
+                startupNotice = "StayPane discarded unreadable recovery data and restored what remained controllable."
+            }
+        }
+        durationSeconds = durationFromEngine()
         synchronizeWithEngine()
         refreshAccessibilityStatus()
         shouldExplainAccessibility = !defaults.bool(forKey: Self.accessibilityIntroKey)
             || !accessibilityGranted
         refreshApplications()
+        if let startupNotice {
+            showNotice(startupNotice)
+        }
 
         let timer = Timer(
             timeInterval: 0.1,
@@ -554,7 +584,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func prepareForSystemTermination() {
-        stopForTermination()
+        quitCoordinator.cancelDeferredQuit()
+        enforcement.suspendForSystemTermination()
+        timer?.invalidate()
     }
 
     private func stopForTermination() {
@@ -612,20 +644,33 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             selectedTargetIDs = Set(activeSession.plan.targets.map(\.id))
         case let .resetPending(pendingReset):
             selectedTargetIDs = Set(pendingReset.activeSession.plan.targets.map(\.id))
-        case .idle, .completed, .endedEarly:
+        case .idle, .completed, .endedEarly, .interrupted:
             selectedTargetIDs = []
         }
     }
 
     private func failOpen(after error: Error) {
-        engine.reset()
+        let reason: SessionInterruptionReason
+        if let enforcementError = error as? ApplicationEnforcementError,
+           enforcementError == .accessibilityPermissionMissing
+        {
+            reason = .accessibilityPermissionLost
+        } else {
+            reason = .enforcementUnavailable
+        }
+        do {
+            try engine.interrupt(reason: reason)
+        } catch {
+            enforcement.stop()
+        }
         selectedTargetIDs = []
         outlineController.hide()
         isReviewing = false
         quitCoordinator.cancelDeferredQuit()
-        engine.beginConfiguration(duration: currentValidDuration())
         synchronizeWithEngine()
-        showNotice("Enforcement stopped safely: \(error.localizedDescription)")
+        showNotice(
+            "Session Interrupted. StayPane failed open and restored what remained controllable: \(error.localizedDescription)"
+        )
     }
 
     private func refreshExpandedWindowListsIfEditable() {
@@ -705,6 +750,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             completedSession.plan.duration.seconds
         case let .endedEarly(endedSession):
             endedSession.plan.duration.seconds
+        case let .interrupted(interruptedSession):
+            interruptedSession.plan.duration.seconds
         case .idle:
             currentValidDuration().seconds
         }
@@ -738,6 +785,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         case .endedEarly:
             guard case .endedEarly = previousState else {
                 presence = .endedEarly
+                break
+            }
+            return
+        case .interrupted:
+            guard case .interrupted = previousState else {
+                presence = .interrupted
                 break
             }
             return

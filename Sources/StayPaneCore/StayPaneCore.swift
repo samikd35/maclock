@@ -24,7 +24,7 @@ public struct SessionDuration: Equatable, Hashable, Codable, Sendable {
     }
 }
 
-public struct ApplicationTarget: Equatable, Hashable, Sendable {
+public struct ApplicationTarget: Codable, Equatable, Hashable, Sendable {
     public let displayName: String
     public let bundleIdentifier: String
     public let processIdentifier: Int32?
@@ -43,7 +43,7 @@ public struct ApplicationTarget: Equatable, Hashable, Sendable {
     }
 }
 
-public struct WindowIdentifier: RawRepresentable, Equatable, Hashable, Sendable {
+public struct WindowIdentifier: RawRepresentable, Codable, Equatable, Hashable, Sendable {
     public let rawValue: UUID
 
     public init(rawValue: UUID = UUID()) {
@@ -51,7 +51,7 @@ public struct WindowIdentifier: RawRepresentable, Equatable, Hashable, Sendable 
     }
 }
 
-public struct WindowTarget: Equatable, Hashable, Identifiable, Sendable {
+public struct WindowTarget: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let id: WindowIdentifier
     public let title: String
     public let application: ApplicationTarget
@@ -67,12 +67,12 @@ public struct WindowTarget: Equatable, Hashable, Identifiable, Sendable {
     }
 }
 
-public enum TargetIdentifier: Equatable, Hashable, Sendable {
+public enum TargetIdentifier: Codable, Equatable, Hashable, Sendable {
     case application(bundleIdentifier: String)
     case window(WindowIdentifier)
 }
 
-public enum SessionTarget: Equatable, Hashable, Sendable {
+public enum SessionTarget: Codable, Equatable, Hashable, Sendable {
     case application(ApplicationTarget)
     case window(WindowTarget)
 
@@ -246,7 +246,7 @@ public struct SessionDraft: Equatable, Sendable {
     }
 }
 
-public struct SessionPlan: Equatable, Sendable {
+public struct SessionPlan: Codable, Equatable, Sendable {
     public let id: UUID
     public let duration: SessionDuration
     public let targets: [SessionTarget]
@@ -336,6 +336,34 @@ public struct EndedEarlySession: Equatable, Sendable {
     }
 }
 
+public enum SessionInterruptionReason: String, Codable, Equatable, Sendable {
+    case accessibilityPermissionLost
+    case enforcementUnavailable
+    case recoveryUnavailable
+}
+
+public struct InterruptedSession: Equatable, Sendable {
+    public let plan: SessionPlan
+    public let startedAt: Date
+    public let interruptedAt: Date
+    public let actualFocusDuration: TimeInterval
+    public let reason: SessionInterruptionReason
+
+    public init(
+        plan: SessionPlan,
+        startedAt: Date,
+        interruptedAt: Date,
+        actualFocusDuration: TimeInterval,
+        reason: SessionInterruptionReason
+    ) {
+        self.plan = plan
+        self.startedAt = startedAt
+        self.interruptedAt = interruptedAt
+        self.actualFocusDuration = actualFocusDuration
+        self.reason = reason
+    }
+}
+
 public enum SessionState: Equatable, Sendable {
     case idle
     case configuring(SessionDraft)
@@ -345,6 +373,7 @@ public enum SessionState: Equatable, Sendable {
     case resetPending(ResetPendingSession)
     case completed(CompletedSession)
     case endedEarly(EndedEarlySession)
+    case interrupted(InterruptedSession)
 }
 
 public enum SessionEngineError: Error, Equatable {
@@ -407,8 +436,15 @@ public protocol SessionClock: AnyObject {
 @MainActor
 public protocol SessionEnforcing: AnyObject {
     func start(allowing targets: [SessionTarget]) throws
+    func resume(allowing targets: [SessionTarget]) throws
     func refresh() throws
     func stop()
+}
+
+public extension SessionEnforcing {
+    func resume(allowing targets: [SessionTarget]) throws {
+        try start(allowing: targets)
+    }
 }
 
 @MainActor
@@ -417,15 +453,21 @@ public final class SessionEngine {
 
     private let clock: any SessionClock
     private let enforcement: any SessionEnforcing
+    private let recoveryStore: any SessionRecoveryPersisting
 
-    public init(clock: any SessionClock, enforcement: any SessionEnforcing) {
+    public init(
+        clock: any SessionClock,
+        enforcement: any SessionEnforcing,
+        recoveryStore: any SessionRecoveryPersisting = NoSessionRecoveryStore()
+    ) {
         self.clock = clock
         self.enforcement = enforcement
+        self.recoveryStore = recoveryStore
     }
 
     public func beginConfiguration(duration: SessionDuration = .default) {
         switch state {
-        case .idle, .completed, .endedEarly:
+        case .idle, .completed, .endedEarly, .interrupted:
             state = .configuring(SessionDraft(duration: duration, targets: []))
         default:
             break
@@ -530,18 +572,25 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
         if hasCompleted(activeSession) {
-            completeNormally(activeSession)
+            try completeNormally(activeSession)
             return
         }
 
-        state = .resetPending(
-            ResetPendingSession(
-                activeSession: activeSession,
-                requestedAt: clock.now,
-                confirmationAvailableAt: clock.now.addingTimeInterval(countdown),
-                continuousConfirmationAvailableAt: clock.continuousNow + countdown
-            )
+        let pendingReset = ResetPendingSession(
+            activeSession: activeSession,
+            requestedAt: clock.now,
+            confirmationAvailableAt: clock.now.addingTimeInterval(countdown),
+            continuousConfirmationAvailableAt: clock.continuousNow + countdown
         )
+        state = .resetPending(pendingReset)
+        do {
+            try recoveryStore.save(
+                SessionRecoverySnapshot(pendingReset: pendingReset)
+            )
+        } catch {
+            state = .enforcing(activeSession)
+            throw error
+        }
     }
 
     public func cancelEarlyReset() throws {
@@ -549,10 +598,13 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
         if hasCompleted(pendingReset.activeSession) {
-            completeNormally(pendingReset.activeSession)
+            try completeNormally(pendingReset.activeSession)
             return
         }
 
+        try recoveryStore.save(
+            SessionRecoverySnapshot(activeSession: pendingReset.activeSession)
+        )
         state = .enforcing(pendingReset.activeSession)
     }
 
@@ -561,13 +613,19 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
         if hasCompleted(pendingReset.activeSession) {
-            completeNormally(pendingReset.activeSession)
+            try completeNormally(pendingReset.activeSession)
             return
         }
         guard clock.continuousNow >= pendingReset.continuousConfirmationAvailableAt else {
             throw SessionEngineError.earlyResetConfirmationNotReady
         }
 
+        do {
+            try recoveryStore.clear()
+        } catch {
+            enforcement.stop()
+            throw error
+        }
         enforcement.stop()
         let activeSession = pendingReset.activeSession
         state = .endedEarly(
@@ -588,13 +646,16 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
         if hasCompleted(pendingReset.activeSession) {
-            completeNormally(pendingReset.activeSession)
+            try completeNormally(pendingReset.activeSession)
             return
         }
         guard clock.continuousNow >= pendingReset.continuousConfirmationAvailableAt else {
             throw SessionEngineError.earlyResetConfirmationNotReady
         }
 
+        try recoveryStore.save(
+            SessionRecoverySnapshot(activeSession: pendingReset.activeSession)
+        )
         state = .enforcing(pendingReset.activeSession)
     }
 
@@ -603,29 +664,39 @@ public final class SessionEngine {
         case let .starting(plan, startsAt) where clock.now >= startsAt:
             do {
                 try enforcement.start(allowing: plan.targets)
-                state = .enforcing(
-                    ActiveSession(
-                        plan: plan,
-                        startedAt: clock.now,
-                        endsAt: clock.now.addingTimeInterval(plan.duration.timeInterval),
-                        continuousStartedAt: clock.continuousNow,
-                        continuousEndsAt: clock.continuousNow + plan.duration.timeInterval
-                    )
+                let activeSession = ActiveSession(
+                    plan: plan,
+                    startedAt: clock.now,
+                    endsAt: clock.now.addingTimeInterval(plan.duration.timeInterval),
+                    continuousStartedAt: clock.continuousNow,
+                    continuousEndsAt: clock.continuousNow + plan.duration.timeInterval
                 )
+                state = .enforcing(activeSession)
+                do {
+                    try recoveryStore.save(
+                        SessionRecoverySnapshot(activeSession: activeSession)
+                    )
+                } catch {
+                    enforcement.stop()
+                    state = .ready(
+                        SessionDraft(duration: plan.duration, targets: plan.targets)
+                    )
+                    throw error
+                }
             } catch {
                 state = .ready(SessionDraft(duration: plan.duration, targets: plan.targets))
                 throw error
             }
 
         case let .enforcing(activeSession) where hasCompleted(activeSession):
-            completeNormally(activeSession)
+            try completeNormally(activeSession)
 
         case .enforcing:
             try enforcement.refresh()
 
         case let .resetPending(pendingReset)
             where hasCompleted(pendingReset.activeSession):
-            completeNormally(pendingReset.activeSession)
+            try completeNormally(pendingReset.activeSession)
 
         case .resetPending:
             try enforcement.refresh()
@@ -641,7 +712,102 @@ public final class SessionEngine {
         } else if case .resetPending = state {
             enforcement.stop()
         }
+        try? recoveryStore.clear()
         state = .idle
+    }
+
+    public func interrupt(reason: SessionInterruptionReason) throws {
+        let activeSession: ActiveSession
+        switch state {
+        case let .enforcing(currentSession):
+            activeSession = currentSession
+        case let .resetPending(pendingReset):
+            activeSession = pendingReset.activeSession
+        default:
+            throw SessionEngineError.invalidTransition
+        }
+
+        state = .interrupted(
+            InterruptedSession(
+                plan: activeSession.plan,
+                startedAt: activeSession.startedAt,
+                interruptedAt: clock.now,
+                actualFocusDuration: max(
+                    0,
+                    clock.continuousNow - activeSession.continuousStartedAt
+                ),
+                reason: reason
+            )
+        )
+        do {
+            try recoveryStore.clear()
+        } catch {
+            enforcement.stop()
+            throw error
+        }
+        enforcement.stop()
+    }
+
+    @discardableResult
+    public func recover() throws -> SessionRecoveryOutcome {
+        guard let snapshot = try recoveryStore.load() else {
+            return .none
+        }
+        let remaining = snapshot.endsAt.timeIntervalSince(clock.now)
+        guard remaining > 0 else {
+            try recoveryStore.clear()
+            enforcement.stop()
+            state = .completed(
+                CompletedSession(plan: snapshot.plan, completedAt: snapshot.endsAt)
+            )
+            return .completedWhileUnavailable
+        }
+
+        let elapsed = max(0, clock.now.timeIntervalSince(snapshot.startedAt))
+        let activeSession = ActiveSession(
+            plan: snapshot.plan,
+            startedAt: snapshot.startedAt,
+            endsAt: snapshot.endsAt,
+            continuousStartedAt: clock.continuousNow - elapsed,
+            continuousEndsAt: clock.continuousNow + remaining
+        )
+        do {
+            try enforcement.resume(allowing: snapshot.plan.targets)
+        } catch {
+            state = .interrupted(
+                InterruptedSession(
+                    plan: snapshot.plan,
+                    startedAt: snapshot.startedAt,
+                    interruptedAt: clock.now,
+                    actualFocusDuration: min(
+                        snapshot.plan.duration.timeInterval,
+                        elapsed
+                    ),
+                    reason: .recoveryUnavailable
+                )
+            )
+            try? recoveryStore.clear()
+            enforcement.stop()
+            throw error
+        }
+        switch snapshot.phase {
+        case .enforcing:
+            state = .enforcing(activeSession)
+        case let .resetPending(requestedAt, confirmationAvailableAt):
+            state = .resetPending(
+                ResetPendingSession(
+                    activeSession: activeSession,
+                    requestedAt: requestedAt,
+                    confirmationAvailableAt: confirmationAvailableAt,
+                    continuousConfirmationAvailableAt: clock.continuousNow
+                        + max(
+                            0,
+                            confirmationAvailableAt.timeIntervalSince(clock.now)
+                        )
+                )
+            )
+        }
+        return .resumed
     }
 
     public func remainingTime() -> TimeInterval? {
@@ -681,7 +847,13 @@ public final class SessionEngine {
         clock.continuousNow >= activeSession.continuousEndsAt
     }
 
-    private func completeNormally(_ activeSession: ActiveSession) {
+    private func completeNormally(_ activeSession: ActiveSession) throws {
+        do {
+            try recoveryStore.clear()
+        } catch {
+            enforcement.stop()
+            throw error
+        }
         enforcement.stop()
         state = .completed(
             CompletedSession(plan: activeSession.plan, completedAt: clock.now)

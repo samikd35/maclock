@@ -15,7 +15,8 @@ import Testing
         permissionClient: AccessibilityPermissionClient(),
         availabilityResolver: resolver,
         notificationCenter: NotificationCenter(),
-        windowOperator: UnusedWindowOperator()
+        windowOperator: UnusedWindowOperator(),
+        windowRecoveryStore: NoWindowRecoveryStore()
     )
     let engine = SessionEngine(clock: clock, enforcement: controller)
     let target = ApplicationTarget(
@@ -51,7 +52,8 @@ import Testing
         permissionClient: FakePermissionChecker(isGranted: false),
         availabilityResolver: FakeApplicationAvailabilityResolver(available: true),
         notificationCenter: NotificationCenter(),
-        windowOperator: UnusedWindowOperator()
+        windowOperator: UnusedWindowOperator(),
+        windowRecoveryStore: NoWindowRecoveryStore()
     )
     let target = ApplicationTarget(
         displayName: "Editor",

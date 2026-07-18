@@ -9,6 +9,7 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
     case allowedApplicationsUnavailable([String])
     case allowedWindowsUnavailable([String])
     case windowRestorationPending(Int)
+    case windowRecoveryUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -22,19 +23,26 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
             "These allowed windows closed before the session started: \(windowTitles.joined(separator: ", ")). Choose their reopened windows again."
         case let .windowRestorationPending(count):
             "StayPane is still restoring \(count) window(s) from the previous session."
+        case .windowRecoveryUnavailable:
+            "StayPane could not load or save the window state required for reliable recovery."
         }
     }
 }
 
 @MainActor
 final class ApplicationEnforcementController: NSObject, SessionEnforcing {
+    private struct RecoveryProcessKey: Hashable {
+        let bundleIdentifier: String
+        let processIdentifier: Int32
+    }
+
     var onBlockedApplication: ((String) -> Void)?
     var onEnforcementFailure: ((Error) -> Void)?
     var onRestorationFailure: ((Int) -> Void)?
     var onRestorationRecovered: (() -> Void)?
 
     var pendingRestorationCount: Int {
-        restorationTracker.pendingCount
+        max(restorationTracker.pendingCount, recoveryReferences.count)
     }
 
     private let permissionClient: any AccessibilityPermissionChecking
@@ -43,11 +51,14 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     private let notificationCenter: NotificationCenter
     private let windowOperator: any AccessibilityWindowOperating
     private let restorationTracker: WindowRestorationTracker
+    private let windowRecoveryStore: any WindowRecoveryPersisting
     private var allowedTargets: [SessionTarget] = []
     private var windowPolicy = WindowAllowlistPolicy(targets: [])
     private var isObserving = false
     private var lastNoticeUptime: TimeInterval = -.infinity
     private var lastFullScanUptime: TimeInterval = -.infinity
+    private var recoveryReferences: [WindowIdentifier: RecoverableWindowReference]
+    private var windowRecoveryLoadFailed = false
 
     private static let fullScanInterval: TimeInterval = 0.25
 
@@ -56,18 +67,46 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         availabilityResolver: any ApplicationAvailabilityResolving,
         windowCatalog: AccessibilityWindowCatalog = AccessibilityWindowCatalog(),
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
-        windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator()
+        windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator(),
+        windowRecoveryStore: any WindowRecoveryPersisting = FileWindowRecoveryStore()
     ) {
         self.permissionClient = permissionClient
         self.availabilityResolver = availabilityResolver
         self.windowCatalog = windowCatalog
         self.notificationCenter = notificationCenter
         self.windowOperator = windowOperator
+        self.windowRecoveryStore = windowRecoveryStore
         restorationTracker = WindowRestorationTracker(operatorClient: windowOperator)
+        let loadedReferences: [RecoverableWindowReference]
+        do {
+            loadedReferences = try windowRecoveryStore.load()
+        } catch {
+            loadedReferences = []
+            windowRecoveryLoadFailed = true
+        }
+        recoveryReferences = [:]
+        for reference in loadedReferences {
+            recoveryReferences[reference.windowIdentifier] = reference
+        }
+        windowCatalog.registerRecoveredWindowReferences(loadedReferences)
         super.init()
     }
 
     func start(allowing targets: [SessionTarget]) throws {
+        try beginEnforcement(allowing: targets, isRecovery: false)
+    }
+
+    func resume(allowing targets: [SessionTarget]) throws {
+        try beginEnforcement(allowing: targets, isRecovery: true)
+    }
+
+    private func beginEnforcement(
+        allowing targets: [SessionTarget],
+        isRecovery: Bool
+    ) throws {
+        guard !windowRecoveryLoadFailed else {
+            throw ApplicationEnforcementError.windowRecoveryUnavailable
+        }
         let applicationTargets = targets.compactMap { target -> ApplicationTarget? in
             guard case let .application(application) = target else {
                 return nil
@@ -86,14 +125,18 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             throw ApplicationEnforcementError.accessibilityPermissionMissing
         }
 
-        let unavailableWindows = windowCatalog.unavailableWindowTargets(in: targets)
-        guard unavailableWindows.isEmpty else {
-            throw ApplicationEnforcementError.allowedWindowsUnavailable(
-                unavailableWindows.map(\.title)
-            )
+        if !isRecovery {
+            let unavailableWindows = windowCatalog.unavailableWindowTargets(in: targets)
+            guard unavailableWindows.isEmpty else {
+                throw ApplicationEnforcementError.allowedWindowsUnavailable(
+                    unavailableWindows.map(\.title)
+                )
+            }
         }
-        if restorationTracker.pendingCount > 0 {
+        try resolvePersistedRestorationWindows()
+        if !isRecovery, pendingRestorationCount > 0 {
             let outcome = restorationTracker.restorePendingWindows()
+            try removeResolvedRecoveryReferences()
             guard outcome.pendingCount == 0 else {
                 throw ApplicationEnforcementError.windowRestorationPending(
                     outcome.pendingCount
@@ -107,7 +150,9 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
         do {
             try enforceCurrentWindows()
-            activateInitialAllowedTarget()
+            if !isRecovery {
+                activateInitialAllowedTarget()
+            }
         } catch {
             stop()
             if pendingRestorationCount > 0 {
@@ -139,21 +184,40 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         windowPolicy = WindowAllowlistPolicy(targets: [])
         lastFullScanUptime = -.infinity
 
-        let outcome = restorationTracker.restorePendingWindows()
-        if outcome.pendingCount > 0 {
-            onRestorationFailure?(outcome.pendingCount)
+        do {
+            try resolvePersistedRestorationWindows()
+            let outcome = restorationTracker.restorePendingWindows()
+            try removeResolvedRecoveryReferences()
+            if outcome.pendingCount > 0 || !recoveryReferences.isEmpty {
+                onRestorationFailure?(pendingRestorationCount)
+            }
+        } catch {
+            onRestorationFailure?(pendingRestorationCount)
         }
     }
 
     func retryPendingRestorations() {
-        guard allowedTargets.isEmpty, restorationTracker.pendingCount > 0 else {
+        guard allowedTargets.isEmpty, pendingRestorationCount > 0 else {
             return
         }
 
-        let outcome = restorationTracker.restorePendingWindows()
-        if outcome.pendingCount == 0 {
-            onRestorationRecovered?()
+        do {
+            try resolvePersistedRestorationWindows()
+            let outcome = restorationTracker.restorePendingWindows()
+            try removeResolvedRecoveryReferences()
+            if outcome.pendingCount == 0, recoveryReferences.isEmpty {
+                onRestorationRecovered?()
+            }
+        } catch {
+            onRestorationFailure?(pendingRestorationCount)
         }
+    }
+
+    func suspendForSystemTermination() {
+        endObservingActivations()
+        allowedTargets = []
+        windowPolicy = WindowAllowlistPolicy(targets: [])
+        lastFullScanUptime = -.infinity
     }
 
     @objc
@@ -198,7 +262,6 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             )
         } catch {
             NSApplication.shared.activate(ignoringOtherApps: true)
-            stop()
             let reportedError: Error = pendingRestorationCount > 0
                 ? ApplicationEnforcementError.windowRestorationPending(
                     pendingRestorationCount
@@ -296,15 +359,15 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         applicationName: String
     ) throws {
         for window in windows where !windowPolicy.allows(window.observation) {
-            try minimize(window.element, applicationName: applicationName)
+            try minimize(window, applicationName: applicationName)
         }
     }
 
     private func minimize(
-        _ window: AXUIElement,
+        _ window: CataloguedAccessibilityWindow,
         applicationName: String
     ) throws {
-        switch windowOperator.minimizedState(of: window) {
+        switch windowOperator.minimizedState(of: window.element) {
         case .minimized(true), .unavailable:
             return
         case .failed:
@@ -313,9 +376,18 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             break
         }
 
-        switch windowOperator.setMinimized(true, for: window) {
+        switch windowOperator.setMinimized(true, for: window.element) {
         case .success:
-            restorationTracker.recordChangedWindow(window)
+            restorationTracker.recordChangedWindow(window.element)
+            if let recoveryReference = window.recoveryReference {
+                recoveryReferences[recoveryReference.windowIdentifier]
+                    = recoveryReference
+                do {
+                    try persistRecoveryReferences()
+                } catch {
+                    throw ApplicationEnforcementError.windowRecoveryUnavailable
+                }
+            }
         case .unavailable:
             return
         case .failed:
@@ -397,5 +469,79 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
         lastNoticeUptime = now
         onBlockedApplication?(message)
+    }
+
+    private func resolvePersistedRestorationWindows() throws {
+        let referencesByProcess = Dictionary(
+            grouping: recoveryReferences.values,
+            by: {
+                RecoveryProcessKey(
+                    bundleIdentifier: $0.bundleIdentifier,
+                    processIdentifier: $0.processIdentifier
+                )
+            }
+        )
+        for (processKey, references) in referencesByProcess {
+            guard let runningApplication = NSRunningApplication(
+                processIdentifier: processKey.processIdentifier
+            ),
+            !runningApplication.isTerminated,
+            runningApplication.bundleIdentifier == processKey.bundleIdentifier
+            else {
+                for reference in references {
+                    recoveryReferences.removeValue(
+                        forKey: reference.windowIdentifier
+                    )
+                }
+                continue
+            }
+
+            let application = makeApplicationTarget(runningApplication)
+            let windows: [CataloguedAccessibilityWindow]
+            do {
+                windows = try windowCatalog.catalogueWindows(for: application)
+            } catch {
+                throw ApplicationEnforcementError.windowRecoveryUnavailable
+            }
+            for window in windows
+                where recoveryReferences[window.target.id] != nil
+            {
+                restorationTracker.recordChangedWindow(window.element)
+            }
+            let availableIdentifiers = Set(windows.map(\.target.id))
+            for reference in references
+                where !availableIdentifiers.contains(reference.windowIdentifier)
+            {
+                recoveryReferences.removeValue(
+                    forKey: reference.windowIdentifier
+                )
+            }
+        }
+        try persistRecoveryReferences()
+    }
+
+    private func removeResolvedRecoveryReferences() throws {
+        for identifier in Array(recoveryReferences.keys) {
+            guard let element = windowCatalog.element(for: identifier) else {
+                recoveryReferences.removeValue(forKey: identifier)
+                continue
+            }
+            switch windowOperator.minimizedState(of: element) {
+            case .minimized(true), .failed:
+                continue
+            case .minimized(false), .unavailable:
+                recoveryReferences.removeValue(forKey: identifier)
+            }
+        }
+        try persistRecoveryReferences()
+    }
+
+    private func persistRecoveryReferences() throws {
+        try windowRecoveryStore.save(
+            recoveryReferences.values.sorted {
+                $0.windowIdentifier.rawValue.uuidString
+                    < $1.windowIdentifier.rawValue.uuidString
+            }
+        )
     }
 }

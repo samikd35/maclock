@@ -5,6 +5,7 @@ import SwiftUI
 struct StayPaneMenuView: View {
     @ObservedObject var model: StayPaneModel
     @ObservedObject var floatingTimerPreferences: FloatingTimerPreferenceModel
+    @ObservedObject var launchAtLoginModel: LaunchAtLoginModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,6 +65,8 @@ struct StayPaneMenuView: View {
                 completedView(completedSession: completedSession)
             case let .endedEarly(endedSession):
                 endedEarlyView(endedSession: endedSession)
+            case let .interrupted(interruptedSession):
+                interruptedView(interruptedSession: interruptedSession)
             }
         }
     }
@@ -164,6 +167,7 @@ struct StayPaneMenuView: View {
             }
 
             floatingTimerSetupCard
+            launchAtLoginCard
 
             Button("Review session") {
                 model.beginReview()
@@ -247,6 +251,13 @@ struct StayPaneMenuView: View {
                 title: "Floating Timer",
                 value: floatingTimerPreferenceSummary,
                 systemImage: "timer"
+            )
+            reviewRow(
+                title: "Launch at Login",
+                value: launchAtLoginModel.isEffective ? "Enabled" : "Recovery limited",
+                systemImage: launchAtLoginModel.isEffective
+                    ? "checkmark.circle"
+                    : "exclamationmark.triangle"
             )
 
             VStack(alignment: .leading, spacing: 8) {
@@ -437,6 +448,44 @@ struct StayPaneMenuView: View {
         .padding(.vertical, 35)
     }
 
+    private func interruptedView(
+        interruptedSession: InterruptedSession
+    ) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 52))
+                .foregroundStyle(.orange)
+            Text("Session Interrupted")
+                .font(.title2.weight(.semibold))
+            Text("StayPane stopped enforcement and restored what remained controllable because reliable enforcement was lost.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Text(interruptionExplanation(interruptedSession.reason))
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Configure another Session") {
+                model.startAnotherSession()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 35)
+    }
+
+    private func interruptionExplanation(
+        _ reason: SessionInterruptionReason
+    ) -> String {
+        switch reason {
+        case .accessibilityPermissionLost:
+            "Accessibility permission became unavailable. Restore it before starting another Session."
+        case .enforcementUnavailable:
+            "The complete Allowlist could no longer be enforced reliably."
+        case .recoveryUnavailable:
+            "StayPane could not safely resume the saved Session."
+        }
+    }
+
     private var honestBoundaryNote: some View {
         Text("Force Quit is a deliberate bypass outside StayPane’s honest self-control boundary.")
             .font(.caption2)
@@ -503,6 +552,49 @@ struct StayPaneMenuView: View {
         }
         .padding(10)
         .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var launchAtLoginCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Launch at Login", systemImage: "arrow.clockwise.circle")
+                .font(.headline)
+            Toggle(
+                "Resume unfinished Sessions after login",
+                isOn: Binding(
+                    get: { launchAtLoginModel.isEnabled },
+                    set: { launchAtLoginModel.setEnabled($0) }
+                )
+            )
+            .toggleStyle(.switch)
+
+            if let recoveryLimitation = launchAtLoginModel.recoveryLimitation {
+                Text(recoveryLimitation)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Enabled by default so logout and restart recovery can begin automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let errorMessage = launchAtLoginModel.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if launchAtLoginModel.status == .requiresApproval {
+                Button("Open Login Items Settings") {
+                    launchAtLoginModel.openSystemSettings()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(10)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .onAppear {
+            launchAtLoginModel.refresh()
+        }
     }
 
     private var floatingTimerPreferenceSummary: String {

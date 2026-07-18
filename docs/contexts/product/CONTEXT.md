@@ -31,3 +31,15 @@ _Avoid_: Window title match, reopened target
 **Fail Open**:
 The outcome in which StayPane stops enforcement and restores what it can because it can no longer enforce the complete Allowlist reliably.
 _Avoid_: Unlock error, bypass
+
+**Fixed End Time**:
+The promised wall-clock end of an active Session, which does not move when StayPane, the screen, or the Mac is temporarily unavailable.
+_Avoid_: Remaining duration, paused timer
+
+**Recovery**:
+Continuing an unfinished Session from its immutable Allowlist and Fixed End Time after StayPane becomes available again.
+_Avoid_: Restart session, reopen session
+
+**Interrupted**:
+A terminal Session outcome produced when StayPane must Fail Open because complete enforcement or safe Recovery is no longer trustworthy.
+_Avoid_: Failed, canceled, completed
