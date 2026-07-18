@@ -468,6 +468,14 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             }
             _ = application.activate(options: [])
             return windowOperator.raise(element) == .success
+
+        case let .browserTab(tabTarget):
+            guard let application = runningApplication(
+                for: tabTarget.application
+            ) else {
+                return false
+            }
+            return application.activate(options: [.activateAllWindows])
         }
     }
 

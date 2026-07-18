@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import StayPaneBridgeProtocol
 import StayPaneCore
 import UniformTypeIdentifiers
 
@@ -14,6 +15,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var windowsByApplicationID: [
         String: [WindowTarget]
     ] = [:]
+    @Published private(set) var browserTabsByApplicationID: [
+        String: [BrowserTabTarget]
+    ] = [:]
+    @Published private(set) var browserBridgeConnected = false
+    @Published private(set) var browserBridgeInstalled = false
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
     @Published var expandedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
@@ -37,6 +43,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let enforcement: ApplicationEnforcementController
     private let historyController: SessionHistoryController
     private let diagnosticLog: DiagnosticLog
+    private let browserBridge: BrowserBridgeController?
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
@@ -62,9 +69,18 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         let historyStore = FileSessionHistoryStore()
         historyController = SessionHistoryController(store: historyStore)
         diagnosticLog = DiagnosticLog()
+        let createdBrowserBridge = try? BrowserBridgeController()
+        browserBridge = createdBrowserBridge
+        let browserEnforcement: any BrowserSessionEnforcing
+        if let createdBrowserBridge {
+            browserEnforcement = createdBrowserBridge
+        } else {
+            browserEnforcement = UnavailableBrowserSessionEnforcement()
+        }
         engine = SessionEngine(
             clock: SystemSessionClock(),
             enforcement: enforcement,
+            browserEnforcement: browserEnforcement,
             recoveryStore: sessionRecoveryStore,
             historyStore: historyStore
         )
@@ -96,6 +112,15 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         enforcement.onRestorationRecovered = { [weak self] in
             self?.recordDiagnostic(.restorationRecovered)
             self?.showNotice("No pending window restorations remain.")
+        }
+        browserBridge?.onChange = { [weak self] in
+            self?.synchronizeBrowserPresentation()
+        }
+        browserBridge?.onBlockedTabActivation = { [weak self] in
+            self?.recordDiagnostic(.blockedTarget)
+            self?.showNotice(
+                "StayPane returned Chrome to the allowed tab."
+            )
         }
 
         var startupNotice: String?
@@ -148,6 +173,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         shouldExplainAccessibility = !defaults.bool(forKey: Self.accessibilityIntroKey)
             || !accessibilityGranted
         refreshApplications()
+        try? browserBridge?.poll()
+        synchronizeBrowserPresentation()
+        refreshChromeBridgeSetupStatus()
         if let startupNotice {
             showNotice(startupNotice)
         }
@@ -185,6 +213,24 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         })
     }
 
+    var selectedBrowserTabIDs: Set<TargetIdentifier> {
+        Set(selectedTargetIDs.filter { identifier in
+            if case .browserTab = identifier {
+                return true
+            }
+            return false
+        })
+    }
+
+    var selectedBrowserApplicationIDs: Set<String> {
+        Set(configuredTargets.compactMap { target in
+            guard case let .browserTab(tab) = target else {
+                return nil
+            }
+            return tab.application.bundleIdentifier
+        })
+    }
+
     var configuredTargets: [SessionTarget] {
         switch engine.state {
         case let .configuring(draft), let .ready(draft):
@@ -197,7 +243,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     var canReview: Bool {
         accessibilityGranted
             && !selectedTargetIDs.isEmpty
-            && selectedApplications.allSatisfy(\.isAvailable)
+            && configuredTargets.allSatisfy { target in
+                applications.first(where: {
+                    $0.id == target.bundleIdentifier
+                })?.isAvailable == true
+            }
+            && (selectedBrowserTabIDs.isEmpty || browserBridgeConnected)
             && SessionDuration(seconds: durationSeconds) != nil
     }
 
@@ -293,6 +344,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         for applicationID in applicationIDsWithWindowLists {
             refreshWindows(for: applicationID)
         }
+        synchronizeBrowserPresentation()
         synchronizeWithEngine()
     }
 
@@ -323,6 +375,68 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             engine.deselectTarget(.window(id))
         }
         synchronizeWithEngine()
+    }
+
+    func browserTabs(for applicationID: String) -> [BrowserTabTarget] {
+        browserTabsByApplicationID[applicationID] ?? []
+    }
+
+    func setBrowserTab(
+        id: TargetIdentifier,
+        isSelected: Bool
+    ) {
+        guard case .browserTab = id else {
+            return
+        }
+        if isSelected {
+            guard let tab = browserTabsByApplicationID.values
+                .joined()
+                .first(where: { $0.targetIdentifier == id })
+            else {
+                return
+            }
+            engine.select(target: .browserTab(tab))
+        } else {
+            engine.deselectTarget(id)
+        }
+        synchronizeWithEngine()
+    }
+
+    func isChromeApplication(_ applicationID: String) -> Bool {
+        applicationID == "com.google.Chrome"
+    }
+
+    func installChromeBridge() {
+        guard let executableURL = chromeBridgeExecutableURL else {
+            showNotice(
+                "StayPaneBridge is missing. Build the app with ‘make app’, then try setup again."
+            )
+            return
+        }
+        do {
+            let manifestURL = try NativeMessagingHostInstaller().install(
+                hostExecutableURL: executableURL
+            )
+            refreshChromeBridgeSetupStatus()
+            showNotice(
+                "Chrome bridge registered locally at \(manifestURL.path). Reload the extension in Chrome."
+            )
+        } catch {
+            refreshChromeBridgeSetupStatus()
+            showNotice(error.localizedDescription)
+        }
+    }
+
+    func openChromeExtensionFolder() {
+        guard let directoryURL = chromeExtensionDirectoryURL else {
+            showNotice(
+                "Build the extension with ‘make extension’ before loading it in Chrome."
+            )
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([
+            directoryURL.appendingPathComponent("manifest.json")
+        ])
     }
 
     func setApplicationExpanded(id: String, isExpanded: Bool) {
@@ -466,6 +580,19 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
         guard !configuredTargets.isEmpty else {
             showNotice("Choose at least one application or window to allow.")
+            return
+        }
+        do {
+            try browserBridge?.preflight(
+                targets: configuredTargets.compactMap { target in
+                    guard case let .browserTab(tab) = target else {
+                        return nil
+                    }
+                    return tab
+                }
+            )
+        } catch {
+            showNotice(error.localizedDescription)
             return
         }
         let unavailableApplications = selectedApplications.filter { !$0.isAvailable }
@@ -639,6 +766,14 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func tick() {
+        do {
+            try browserBridge?.poll()
+        } catch {
+            if isActiveSession {
+                failOpen(after: error)
+                return
+            }
+        }
         if Date().timeIntervalSince(lastPermissionCheck) >= 1 {
             lastPermissionCheck = Date()
             refreshAccessibilityStatus(forceVerification: false)
@@ -816,6 +951,84 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         default:
             break
         }
+    }
+
+    private func synchronizeBrowserPresentation() {
+        browserBridgeConnected = browserBridge?.isConnected == true
+        var refreshed: [String: [BrowserTabTarget]] = [:]
+        for application in applications
+            where isChromeApplication(application.id) {
+            refreshed[application.id] = browserBridge?.targets(
+                for: application.target
+            ) ?? []
+        }
+        browserTabsByApplicationID = refreshed
+
+        switch engine.state {
+        case .configuring, .ready:
+            let replacements = configuredTargets.compactMap {
+                target -> BrowserTabTarget? in
+                guard case let .browserTab(selected) = target else {
+                    return nil
+                }
+                return refreshed.values.joined().first(where: {
+                    $0.targetIdentifier == selected.targetIdentifier
+                })
+            }
+            for replacement in replacements {
+                engine.select(target: .browserTab(replacement))
+            }
+            if !replacements.isEmpty {
+                synchronizeWithEngine()
+            }
+        default:
+            break
+        }
+    }
+
+    private func refreshChromeBridgeSetupStatus() {
+        guard let executableURL = chromeBridgeExecutableURL else {
+            browserBridgeInstalled = false
+            return
+        }
+        browserBridgeInstalled = NativeMessagingHostInstaller().isInstalled(
+            hostExecutableURL: executableURL
+        )
+    }
+
+    private var chromeBridgeExecutableURL: URL? {
+        guard let executableDirectory = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+        else {
+            return nil
+        }
+        let candidate = executableDirectory.appendingPathComponent(
+            "StayPaneBridge",
+            isDirectory: false
+        )
+        return FileManager.default.isExecutableFile(atPath: candidate.path)
+            ? candidate
+            : nil
+    }
+
+    private var chromeExtensionDirectoryURL: URL? {
+        let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent(
+                "ChromeExtension",
+                isDirectory: true
+            ),
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ChromeExtension/dist", isDirectory: true),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("ChromeExtension/dist", isDirectory: true)
+        ].compactMap { $0 }
+        return candidates.first(where: {
+            FileManager.default.fileExists(
+                atPath: $0.appendingPathComponent("manifest.json").path
+            )
+        })
     }
 
     private func removeClosedWindowSelections(

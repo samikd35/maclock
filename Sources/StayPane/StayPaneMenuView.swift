@@ -27,7 +27,7 @@ struct StayPaneMenuView: View {
             Divider()
             footer
         }
-        .frame(width: 390, height: 540)
+        .frame(width: 410, height: 620)
         .confirmationDialog(
             "Clear all Session History?",
             isPresented: Binding(
@@ -101,6 +101,8 @@ struct StayPaneMenuView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.green)
             }
+
+            chromeCompanionCard
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Focus duration")
@@ -185,6 +187,9 @@ struct StayPaneMenuView: View {
                 if !model.selectedWindowIDs.isEmpty {
                     preciseWindowNote
                 }
+                if !model.selectedBrowserTabIDs.isEmpty {
+                    preciseBrowserTabNote
+                }
             }
 
             floatingTimerSetupCard
@@ -230,6 +235,54 @@ struct StayPaneMenuView: View {
         .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
+    private var chromeCompanionCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("Chrome tab companion", systemImage: "puzzlepiece.extension")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                Label(
+                    model.browserBridgeInstalled ? "Bridge registered" : "Bridge not registered",
+                    systemImage: model.browserBridgeInstalled
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.circle"
+                )
+                .foregroundStyle(model.browserBridgeInstalled ? .green : .orange)
+
+                Label(
+                    model.browserBridgeConnected ? "Connected" : "Disconnected",
+                    systemImage: model.browserBridgeConnected
+                        ? "link.circle.fill"
+                        : "link.badge.plus"
+                )
+                .foregroundStyle(model.browserBridgeConnected ? .green : .secondary)
+            }
+            .font(.caption.weight(.medium))
+
+            Text("One-time local setup: register the packaged bridge, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button(
+                    model.browserBridgeInstalled
+                        ? "Repair Local Bridge"
+                        : "Register Local Bridge"
+                ) {
+                    model.installChromeBridge()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Show Extension Folder") {
+                    model.openChromeExtensionFolder()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(10)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private var reviewView: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Review your session")
@@ -255,9 +308,16 @@ struct StayPaneMenuView: View {
                 broadApplicationWarning
             }
             if model.configuredTargets.contains(where: {
-                !targetPresentation($0).isBroadApplication
+                if case .window = $0 { return true }
+                return false
             }) {
                 preciseWindowNote
+            }
+            if model.configuredTargets.contains(where: {
+                if case .browserTab = $0 { return true }
+                return false
+            }) {
+                preciseBrowserTabNote
             }
             reviewRow(
                 title: "Duration",
@@ -352,7 +412,7 @@ struct StayPaneMenuView: View {
                 }
             }
 
-            Text("Other application windows are minimized. Sheets and dialogs attached to an allowed window remain usable; unrelated windows stay blocked.")
+            Text("Other application windows are minimized. For a selected Chrome tab, activating another tab immediately returns to the allowed tab.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -733,6 +793,17 @@ struct StayPaneMenuView: View {
         .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
+    private var preciseBrowserTabNote: some View {
+        Label(
+            "Chrome tab targets control tab activation only in this version. The chosen tab is immutable during the session, but navigation inside it remains unrestricted until website-scope support is added.",
+            systemImage: "rectangle.stack.badge.person.crop"
+        )
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.blue)
+        .padding(10)
+        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     @ViewBuilder
     private func applicationPickerRow(
         _ application: ApplicationCatalogItem
@@ -753,7 +824,7 @@ struct StayPaneMenuView: View {
             ) {
                 let windows = model.windows(for: application.id)
                 if windows.isEmpty {
-                    Text("No current windows")
+                    Text("No current macOS windows")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 28)
@@ -782,6 +853,9 @@ struct StayPaneMenuView: View {
                             .toggleStyle(.checkbox)
                             .disabled(
                                 model.selectedApplicationIDs.contains(application.id)
+                                    || model.selectedBrowserApplicationIDs.contains(
+                                        application.id
+                                    )
                             )
                             .padding(.leading, 24)
                             .onHover {
@@ -793,12 +867,103 @@ struct StayPaneMenuView: View {
                         }
                     }
                 }
+
+                if model.isChromeApplication(application.id) {
+                    chromeTabPicker(for: application)
+                }
             } label: {
                 applicationToggle(application)
             }
         } else {
             applicationToggle(application)
         }
+    }
+
+    @ViewBuilder
+    private func chromeTabPicker(
+        for application: ApplicationCatalogItem
+    ) -> some View {
+        Divider()
+            .padding(.leading, 24)
+        Label("Chrome tabs", systemImage: "rectangle.stack")
+            .font(.caption.weight(.semibold))
+            .padding(.leading, 24)
+
+        if !model.browserBridgeConnected {
+            Text("Connect the Chrome companion above to choose an individual tab.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 28)
+        } else if model.browserTabs(for: application.id).isEmpty {
+            Text("No eligible tabs reported by Chrome")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 28)
+        } else {
+            let groups = Dictionary(
+                grouping: model.browserTabs(for: application.id),
+                by: \.windowIdentifier
+            )
+            ForEach(
+                groups.keys.sorted { $0.rawValue < $1.rawValue },
+                id: \.self
+            ) { windowIdentifier in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Chrome window \(windowIdentifier.rawValue)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(
+                        groups[windowIdentifier] ?? [],
+                        id: \.targetIdentifier
+                    ) { tab in
+                        browserTabToggle(tab, applicationID: application.id)
+                    }
+                }
+                .padding(.leading, 28)
+            }
+        }
+    }
+
+    private func browserTabToggle(
+        _ tab: BrowserTabTarget,
+        applicationID: String
+    ) -> some View {
+        Toggle(
+            isOn: Binding(
+                get: {
+                    model.selectedBrowserTabIDs.contains(tab.targetIdentifier)
+                },
+                set: {
+                    model.setBrowserTab(
+                        id: tab.targetIdentifier,
+                        isSelected: $0
+                    )
+                }
+            )
+        ) {
+            HStack(spacing: 7) {
+                if let faviconData = tab.faviconPNGData,
+                   let favicon = NSImage(data: faviconData) {
+                    Image(nsImage: favicon)
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                } else {
+                    Image(systemName: "globe")
+                        .frame(width: 16, height: 16)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tab.title)
+                        .lineLimit(1)
+                    Text(tab.url.host ?? tab.url.absoluteString)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .font(.subheadline)
+        }
+        .toggleStyle(.checkbox)
+        .disabled(model.selectedApplicationIDs.contains(applicationID))
     }
 
     private func applicationToggle(
@@ -876,6 +1041,14 @@ struct StayPaneMenuView: View {
                 reviewTitle: "Individual window in \(window.application.displayName)",
                 reviewValue: window.title,
                 systemImage: "macwindow.on.rectangle",
+                isBroadApplication: false
+            )
+        case let .browserTab(tab):
+            TargetPresentation(
+                label: "\(tab.title) in \(tab.application.displayName)",
+                reviewTitle: "Individual Chrome tab",
+                reviewValue: "\(tab.title) — \(tab.url.host ?? tab.url.absoluteString)",
+                systemImage: "rectangle.stack",
                 isBroadApplication: false
             )
         }

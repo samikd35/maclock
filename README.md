@@ -1,12 +1,12 @@
 # StayPane
 
-StayPane is a source-only macOS menu-bar focus timer. You choose one or more applications or exact windows and a duration; during the session, StayPane minimizes other windows and returns focus to the most recently used allowed target without quitting anything.
+StayPane is a source-only macOS menu-bar focus timer. You choose one or more applications, exact windows, or one individual Chrome tab and a duration; during the session, StayPane minimizes other windows and returns focus to the allowed target without quitting anything.
 
 StayPane targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Window discovery and hover outlines use Accessibility geometry only: Screen Recording permission is not required.
 
 ## Build and run
 
-Install Apple's Command Line Tools, then run:
+Install Apple's Command Line Tools and Node.js, then run:
 
 ```sh
 make run
@@ -20,11 +20,23 @@ Run the tests with:
 
 ```sh
 make test
+make test-extension
 ```
 
 ## Current scope
 
-Sessions support multiple broad application targets and exact windows. A broad application target may be running or selected from an installed `.app` bundle; every current and future window and all content inside it remains available. Expanding a running application lets you choose exact current windows instead. Exact selection permits the chosen window and its attached sheets or modal dialogs while sibling, reopened, and newly created independent windows stay blocked. Browser-tab targeting belongs to a later ticket in [`tickets.md`](tickets.md).
+Sessions support multiple broad application targets, exact windows, or one individual non-Incognito Chrome tab. A broad application target may be running or selected from an installed `.app` bundle; every current and future window and all content inside it remains available. Expanding a running application lets you choose exact current windows instead. Exact selection permits the chosen window and its attached sheets or modal dialogs while sibling, reopened, and newly created independent windows stay blocked. A Chrome Tab Target returns Chrome to the chosen tab whenever another tab is activated. This slice controls tab identity only: navigation inside the allowed tab remains unrestricted until Ticket 09.
+
+## Optional Chrome setup
+
+Chrome integration is entirely local and does not require a Google developer account or Chrome Web Store listing.
+
+1. Build the packaged app and extension with `make app`, then open `.build/StayPane.app`.
+2. In StayPane, choose **Register Local Bridge**. This writes a user-level native-host manifest that accepts only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
+3. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `.build/StayPane.app/Contents/Resources/ChromeExtension` (the **Show Extension Folder** button reveals it).
+4. Return to StayPane and wait for **Connected**. Expand Google Chrome to choose a tab grouped beneath its Chrome window.
+
+The extension sends current tab metadata only through Chrome native messaging to the packaged bridge, which proxies it over a user-only Unix socket to StayPane. There is no StayPane server, analytics endpoint, or remote browsing-data transport. Incognito access is disabled. Pinning the extension makes its brief, rate-limited blocked-tab badge easier to see. Full verification steps are in [`docs/manual-testing/ticket-08-chrome-tab.md`](docs/manual-testing/ticket-08-chrome-tab.md).
 
 Platform-dependent acceptance steps for multiple displays, Spaces, full-screen windows, system dialogs, and restoration are documented in [`docs/manual-testing/ticket-04-window-enforcement.md`](docs/manual-testing/ticket-04-window-enforcement.md).
 

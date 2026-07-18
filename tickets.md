@@ -138,22 +138,22 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 08 — Connect one Chrome tab through the native bridge
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Establish the narrowest complete browser slice: an unpacked Chrome extension connects locally to StayPane, exposes tabs to the picker, and keeps one selected tab active during a session.
 
 **Blocked by:** 04 — Enforce individual window targets precisely.
 
-- [ ] The Manifest V3 extension builds from source and loads through Chrome Developer Mode without a Google developer account.
-- [ ] A local setup action registers the native messaging bridge for the expected unpacked extension identity.
-- [ ] The extension and bridge complete a validated handshake and expose connected/disconnected state to the Mac app.
-- [ ] The target picker shows open Chrome tabs beneath their Chrome windows with title, hostname, and favicon when available.
-- [ ] A user can select one tab as an immutable session target.
-- [ ] A tab-restricted session refuses to start when the extension or bridge preflight fails.
-- [ ] Activating another tab during the session returns Chrome to the selected tab and produces rate-limited feedback.
-- [ ] Native messages are schema-validated and rejected when the caller identity or content is invalid.
-- [ ] The extension and bridge contact no remote StayPane service and transmit browsing data only across the local connection.
-- [ ] Automated contract tests cover handshake, tab discovery, activation enforcement, malformed messages, and connection setup errors.
+- [x] The Manifest V3 extension builds from source and loads through Chrome Developer Mode without a Google developer account.
+- [x] A local setup action registers the native messaging bridge for the expected unpacked extension identity.
+- [x] The extension and bridge complete a validated handshake and expose connected/disconnected state to the Mac app.
+- [x] The target picker shows open Chrome tabs beneath their Chrome windows with title, hostname, and favicon when available.
+- [x] A user can select one tab as an immutable session target.
+- [x] A tab-restricted session refuses to start when the extension or bridge preflight fails.
+- [x] Activating another tab during the session returns Chrome to the selected tab and produces rate-limited feedback.
+- [x] Native messages are schema-validated and rejected when the caller identity or content is invalid.
+- [x] The extension and bridge contact no remote StayPane service and transmit browsing data only across the local connection.
+- [x] Automated contract tests cover handshake, tab discovery, activation enforcement, malformed messages, and connection setup errors.
 
 ## 09 — Constrain an allowed Chrome tab to its website
 

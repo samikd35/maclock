@@ -3,3 +3,5 @@
 .swiftpm/
 DerivedData/
 *.xcuserstate
+ChromeExtension/node_modules/
+ChromeExtension/dist/

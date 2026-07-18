@@ -24,6 +24,10 @@ _Avoid_: App lock, application exception
 A precise Target representing one currently existing window and qualifying transient children attached to it.
 _Avoid_: Window title, document target
 
+**Tab Target**:
+A precise Target representing one currently existing, non-Incognito browser tab within one Browser Profile. Its identity, not its title or URL, determines which tab remains available.
+_Avoid_: Website target, tab title, browser exception
+
 **Exact Window Identity**:
 The identity of one currently existing window. Closing it ends that identity; a reopened window with the same title has a new identity.
 _Avoid_: Window title match, reopened target
