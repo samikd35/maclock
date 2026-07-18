@@ -5,15 +5,15 @@ import Testing
 
 @MainActor
 @Test func persistedPrivacyArtifactsExcludeTargetAndBrowsingDetails() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPanePrivacyPersistenceTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let directory = TemporaryTestDirectory(
+        named: "StayPanePrivacyPersistenceTests"
+    )
+    defer { directory.remove() }
 
-    let historyURL = directory.appendingPathComponent("session-history.json")
-    let recoveryURL = directory.appendingPathComponent("active-session.json")
-    let diagnosticURL = directory.appendingPathComponent("diagnostics.json")
-    let exportURL = directory.appendingPathComponent("diagnostics-export.json")
+    let historyURL = directory.url.appendingPathComponent("session-history.json")
+    let recoveryURL = directory.url.appendingPathComponent("active-session.json")
+    let diagnosticURL = directory.url.appendingPathComponent("diagnostics.json")
+    let exportURL = directory.url.appendingPathComponent("diagnostics-export.json")
     let history = FileSessionHistoryStore(fileURL: historyURL)
     let recovery = FileSessionRecoveryStore(fileURL: recoveryURL)
     let clock = PrivacyTestClock(
@@ -73,8 +73,10 @@ import Testing
     let diagnostics = DiagnosticLog(fileURL: diagnosticURL)
     try diagnostics.record(
         .sessionCompleted,
-        details: privateValues.joined(separator: " | "),
-        privateValues: privateValues
+        detail: .privateContent(
+            privateValues.joined(separator: " | "),
+            privateValues: privateValues
+        )
     )
     _ = try diagnostics.export(to: exportURL)
 

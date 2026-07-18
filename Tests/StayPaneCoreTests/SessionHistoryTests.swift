@@ -215,6 +215,65 @@ import Testing
 }
 
 @MainActor
+@Test func historyWriteFailureIsReportedWithoutPreventingUnlock() throws {
+    let clock = HistoryTestClock(
+        now: Date(timeIntervalSince1970: 35_000),
+        continuousNow: 20
+    )
+    let engine = SessionEngine(
+        clock: clock,
+        enforcement: HistoryTestEnforcement(),
+        historyStore: FailingSessionHistoryStore()
+    )
+    engine.beginConfiguration(duration: SessionDuration(seconds: 10)!)
+    engine.select(
+        target: ApplicationTarget(
+            displayName: "Private Editor",
+            bundleIdentifier: "com.example.private-editor"
+        )
+    )
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    clock.advance(by: 10)
+
+    try engine.advance()
+
+    guard case .completed = engine.state else {
+        Issue.record("History failure must not prevent Session completion.")
+        return
+    }
+    #expect(engine.didFailToRecordHistory)
+}
+
+@MainActor
+@Test func sessionHistoryClearRequiresConfirmationAndUpdatesVisibleRecords() throws {
+    let store = InMemorySessionHistoryStore()
+    try store.record(
+        SessionHistoryRecord(
+            startedAt: Date(timeIntervalSince1970: 36_000),
+            plannedDuration: SessionDuration(seconds: 10)!,
+            actualFocusTime: 10,
+            result: .completed
+        )
+    )
+    let controller = SessionHistoryController(store: store)
+    try controller.reload()
+    #expect(controller.records.count == 1)
+
+    #expect(try !controller.confirmClear())
+    controller.requestClear()
+    controller.cancelClear()
+    #expect(try !controller.confirmClear())
+    #expect(controller.records.count == 1)
+    #expect(try store.load().count == 1)
+
+    controller.requestClear()
+    #expect(try controller.confirmClear())
+    #expect(controller.records.isEmpty)
+    #expect(try store.load().isEmpty)
+}
+
+@MainActor
 private final class InMemorySessionHistoryStore: SessionHistoryStoring {
     private var records: [SessionHistoryRecord] = []
 
@@ -285,6 +344,19 @@ private final class FailingHistoryRecoveryEnforcement: SessionEnforcing {
 
     func refresh() throws {}
     func stop() {}
+}
+
+@MainActor
+private final class FailingSessionHistoryStore: SessionHistoryStoring {
+    func load() throws -> [SessionHistoryRecord] {
+        []
+    }
+
+    func record(_ record: SessionHistoryRecord) throws {
+        throw HistoryTestError.unavailable
+    }
+
+    func clear() throws {}
 }
 
 private enum HistoryTestError: Error, Equatable {

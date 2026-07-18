@@ -20,7 +20,10 @@ public struct SessionHistoryRecord: Codable, Equatable, Sendable {
     ) {
         self.startedAt = startedAt
         self.plannedDuration = plannedDuration
-        self.actualFocusTime = actualFocusTime
+        self.actualFocusTime = min(
+            plannedDuration.timeInterval,
+            max(0, actualFocusTime)
+        )
         self.result = result
     }
 }
@@ -43,4 +46,39 @@ public final class NoSessionHistoryStore: SessionHistoryStoring {
     public func record(_ record: SessionHistoryRecord) throws {}
 
     public func clear() throws {}
+}
+
+@MainActor
+public final class SessionHistoryController {
+    public private(set) var records: [SessionHistoryRecord] = []
+    public private(set) var isClearConfirmationPresented = false
+
+    private let store: any SessionHistoryStoring
+
+    public init(store: any SessionHistoryStoring) {
+        self.store = store
+    }
+
+    public func reload() throws {
+        records = try store.load()
+    }
+
+    public func requestClear() {
+        isClearConfirmationPresented = true
+    }
+
+    public func cancelClear() {
+        isClearConfirmationPresented = false
+    }
+
+    @discardableResult
+    public func confirmClear() throws -> Bool {
+        guard isClearConfirmationPresented else {
+            return false
+        }
+        try store.clear()
+        records = []
+        isClearConfirmationPresented = false
+        return true
+    }
 }

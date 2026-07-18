@@ -5,11 +5,11 @@ import Testing
 
 @MainActor
 @Test func sessionHistoryFileStoreRoundTripsAndClearsMinimalRecords() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPaneSessionHistoryTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let fileURL = directory.appendingPathComponent("history.json")
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneSessionHistoryTests"
+    )
+    defer { directory.remove() }
+    let fileURL = directory.url.appendingPathComponent("history.json")
     let store = FileSessionHistoryStore(fileURL: fileURL)
     let record = SessionHistoryRecord(
         startedAt: Date(timeIntervalSince1970: 40_000),
@@ -27,12 +27,12 @@ import Testing
 
 @MainActor
 @Test func sessionHistoryRetainsOnlyTheLatestOneHundredRecords() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPaneBoundedHistoryTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneBoundedHistoryTests"
+    )
+    defer { directory.remove() }
     let store = FileSessionHistoryStore(
-        fileURL: directory.appendingPathComponent("history.json")
+        fileURL: directory.url.appendingPathComponent("history.json")
     )
 
     for index in 0..<105 {

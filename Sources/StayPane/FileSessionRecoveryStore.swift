@@ -40,11 +40,8 @@ final class FileSessionRecoveryStore: SessionRecoveryPersisting {
     }
 
     private static var defaultFileURL: URL {
-        FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0]
-        .appendingPathComponent("StayPane", isDirectory: true)
-        .appendingPathComponent("active-session.json", isDirectory: false)
+        StayPaneStorageLocation.applicationSupportFile(
+            named: "active-session.json"
+        )
     }
 }

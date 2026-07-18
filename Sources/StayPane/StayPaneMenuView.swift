@@ -6,7 +6,6 @@ struct StayPaneMenuView: View {
     @ObservedObject var model: StayPaneModel
     @ObservedObject var floatingTimerPreferences: FloatingTimerPreferenceModel
     @ObservedObject var launchAtLoginModel: LaunchAtLoginModel
-    @State private var isConfirmingHistoryClear = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,13 +30,22 @@ struct StayPaneMenuView: View {
         .frame(width: 390, height: 540)
         .confirmationDialog(
             "Clear all Session History?",
-            isPresented: $isConfirmingHistoryClear,
+            isPresented: Binding(
+                get: { model.isConfirmingHistoryClear },
+                set: { isPresented in
+                    if !isPresented {
+                        model.cancelHistoryClear()
+                    }
+                }
+            ),
             titleVisibility: .visible
         ) {
             Button("Clear History", role: .destructive) {
-                model.clearHistory()
+                model.confirmHistoryClear()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                model.cancelHistoryClear()
+            }
         } message: {
             Text("This permanently removes all retained local Session History records.")
         }
@@ -619,7 +627,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.secondary)
 
             if model.sessionHistory.isEmpty {
-                Text("No completed Sessions yet.")
+                Text("No Session History yet.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
@@ -635,7 +643,7 @@ struct StayPaneMenuView: View {
 
             HStack {
                 Button("Clear History…", role: .destructive) {
-                    isConfirmingHistoryClear = true
+                    model.requestHistoryClear()
                 }
                 .disabled(model.sessionHistory.isEmpty)
 

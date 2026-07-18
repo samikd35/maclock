@@ -26,6 +26,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var earlyResetRemainingTime: TimeInterval = 0
     @Published private(set) var notice: String?
     @Published private(set) var sessionHistory: [SessionHistoryRecord] = []
+    @Published private(set) var isConfirmingHistoryClear = false
     @Published private var transientSessionPresence: SessionPresence?
 
     private let defaults: UserDefaults
@@ -34,7 +35,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let windowCatalog: AccessibilityWindowCatalog
     private let outlineController: WindowOutlineController
     private let enforcement: ApplicationEnforcementController
-    private let historyStore: FileSessionHistoryStore
+    private let historyController: SessionHistoryController
     private let diagnosticLog: DiagnosticLog
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
@@ -59,7 +60,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         )
         let sessionRecoveryStore = FileSessionRecoveryStore()
         let historyStore = FileSessionHistoryStore()
-        self.historyStore = historyStore
+        historyController = SessionHistoryController(store: historyStore)
         diagnosticLog = DiagnosticLog()
         engine = SessionEngine(
             clock: SystemSessionClock(),
@@ -86,7 +87,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         enforcement.onRestorationFailure = { [weak self] count in
             self?.recordDiagnostic(
                 .restorationPending,
-                details: "Pending Restoration count: \(count)."
+                detail: .count(count)
             )
             self?.showNotice(
                 "\(count) window(s) could not be restored yet. StayPane will keep retrying."
@@ -123,11 +124,20 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             }
         }
         do {
-            sessionHistory = try historyStore.load()
+            try historyController.reload()
+            synchronizeHistoryPresentation()
         } catch {
             startupNotice = [
                 startupNotice,
                 "StayPane could not load Session History."
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        }
+        if engine.didFailToRecordHistory {
+            startupNotice = [
+                startupNotice,
+                "The Session ended safely, but StayPane could not add it to Session History."
             ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -584,10 +594,22 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         refreshApplications()
     }
 
-    func clearHistory() {
+    func requestHistoryClear() {
+        historyController.requestClear()
+        synchronizeHistoryPresentation()
+    }
+
+    func cancelHistoryClear() {
+        historyController.cancelClear()
+        synchronizeHistoryPresentation()
+    }
+
+    func confirmHistoryClear() {
         do {
-            try historyStore.clear()
-            sessionHistory = []
+            guard try historyController.confirmClear() else {
+                return
+            }
+            synchronizeHistoryPresentation()
             showNotice("Session History was cleared.")
         } catch {
             showNotice("StayPane could not clear Session History.")
@@ -696,7 +718,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         state = nextState
         updateTransientSessionPresence(from: previousState, to: nextState)
         if hasCompletedInitialSynchronization {
-            updateTerminalPersistence(from: previousState, to: nextState)
+            handleTerminalStateTransition(from: previousState, to: nextState)
         }
         hasCompletedInitialSynchronization = true
         remainingTime = engine.remainingTime() ?? 0
@@ -731,7 +753,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         )
     }
 
-    private func updateTerminalPersistence(
+    private func handleTerminalStateTransition(
         from previousState: SessionState,
         to nextState: SessionState
     ) {
@@ -761,22 +783,28 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func refreshSessionHistory() {
         do {
-            sessionHistory = try historyStore.load()
+            try historyController.reload()
+            synchronizeHistoryPresentation()
+            if engine.didFailToRecordHistory {
+                showNotice(
+                    "The Session ended safely, but StayPane could not add it to Session History."
+                )
+            }
         } catch {
             showNotice("StayPane could not refresh Session History.")
         }
     }
 
+    private func synchronizeHistoryPresentation() {
+        sessionHistory = historyController.records
+        isConfirmingHistoryClear = historyController.isClearConfirmationPresented
+    }
+
     private func recordDiagnostic(
         _ event: DiagnosticEvent,
-        details: String? = nil,
-        privateValues: [String] = []
+        detail: DiagnosticDetail? = nil
     ) {
-        try? diagnosticLog.record(
-            event,
-            details: details,
-            privateValues: privateValues
-        )
+        try? diagnosticLog.record(event, detail: detail)
     }
 
     private func refreshExpandedWindowListsIfEditable() {

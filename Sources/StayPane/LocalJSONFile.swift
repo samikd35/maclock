@@ -40,3 +40,43 @@ final class LocalJSONFile<Value: Codable> {
         try fileManager.removeItem(at: fileURL)
     }
 }
+
+@MainActor
+final class BoundedLocalJSONCollection<Element: Codable> {
+    private let file: LocalJSONFile<[Element]>
+    private let maximumCount: Int
+
+    init(
+        fileURL: URL,
+        maximumCount: Int,
+        fileManager: FileManager = .default
+    ) {
+        file = LocalJSONFile(fileURL: fileURL, fileManager: fileManager)
+        self.maximumCount = maximumCount
+    }
+
+    func load() throws -> [Element] {
+        try file.load() ?? []
+    }
+
+    func append(_ element: Element) throws {
+        var elements = try load()
+        elements.append(element)
+        try file.save(Array(elements.suffix(maximumCount)))
+    }
+
+    func clear() throws {
+        try file.clear()
+    }
+}
+
+enum StayPaneStorageLocation {
+    static func applicationSupportFile(named fileName: String) -> URL {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        .appendingPathComponent("StayPane", isDirectory: true)
+        .appendingPathComponent(fileName, isDirectory: false)
+    }
+}

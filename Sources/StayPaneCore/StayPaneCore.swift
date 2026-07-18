@@ -449,6 +449,7 @@ public extension SessionEnforcing {
 @MainActor
 public final class SessionEngine {
     public private(set) var state: SessionState = .idle
+    public private(set) var didFailToRecordHistory = false
 
     private let clock: any SessionClock
     private let enforcement: any SessionEnforcing
@@ -765,10 +766,12 @@ public final class SessionEngine {
                 CompletedSession(plan: snapshot.plan, completedAt: snapshot.endsAt)
             )
             recordHistory(
-                startedAt: snapshot.startedAt,
-                plannedDuration: snapshot.plan.duration,
-                actualFocusTime: snapshot.plan.duration.timeInterval,
-                result: .completed
+                SessionHistoryRecord(
+                    startedAt: snapshot.startedAt,
+                    plannedDuration: snapshot.plan.duration,
+                    actualFocusTime: snapshot.plan.duration.timeInterval,
+                    result: .completed
+                )
             )
             return .completedWhileUnavailable
         }
@@ -798,10 +801,12 @@ public final class SessionEngine {
                 )
             )
             recordHistory(
-                startedAt: snapshot.startedAt,
-                plannedDuration: snapshot.plan.duration,
-                actualFocusTime: elapsed,
-                result: .interrupted
+                SessionHistoryRecord(
+                    startedAt: snapshot.startedAt,
+                    plannedDuration: snapshot.plan.duration,
+                    actualFocusTime: elapsed,
+                    result: .interrupted
+                )
             )
             try? protectInterruptedSession()
             enforcement.stop()
@@ -883,31 +888,23 @@ public final class SessionEngine {
         result: SessionResult
     ) {
         recordHistory(
-            startedAt: activeSession.startedAt,
-            plannedDuration: activeSession.plan.duration,
-            actualFocusTime: clock.continuousNow
-                - activeSession.continuousStartedAt,
-            result: result
-        )
-    }
-
-    private func recordHistory(
-        startedAt: Date,
-        plannedDuration: SessionDuration,
-        actualFocusTime: TimeInterval,
-        result: SessionResult
-    ) {
-        try? historyStore.record(
             SessionHistoryRecord(
-                startedAt: startedAt,
-                plannedDuration: plannedDuration,
-                actualFocusTime: min(
-                    plannedDuration.timeInterval,
-                    max(0, actualFocusTime)
-                ),
+                startedAt: activeSession.startedAt,
+                plannedDuration: activeSession.plan.duration,
+                actualFocusTime: clock.continuousNow
+                    - activeSession.continuousStartedAt,
                 result: result
             )
         )
+    }
+
+    private func recordHistory(_ record: SessionHistoryRecord) {
+        didFailToRecordHistory = false
+        do {
+            try historyStore.record(record)
+        } catch {
+            didFailToRecordHistory = true
+        }
     }
 
     private func protectInterruptedSession() throws {

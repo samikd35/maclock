@@ -4,12 +4,12 @@ import Testing
 
 @MainActor
 @Test func diagnosticLogRedactsPrivateContentAndNetworkLocations() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPaneDiagnosticRedactionTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneDiagnosticRedactionTests"
+    )
+    defer { directory.remove() }
     let log = DiagnosticLog(
-        fileURL: directory.appendingPathComponent("diagnostics.json"),
+        fileURL: directory.url.appendingPathComponent("diagnostics.json"),
         now: { Date(timeIntervalSince1970: 50_000) }
     )
     let privateValues = [
@@ -20,8 +20,10 @@ import Testing
 
     try log.record(
         .sessionStartFailed,
-        details: "Secret Editor | Confidential Window | Hidden Tab | https://private.example.com/work?q=1 | private.example.com",
-        privateValues: privateValues
+        detail: .privateContent(
+            "Secret Editor | Confidential Window | Hidden Tab | https://private.example.com/work?q=1 | private.example.com",
+            privateValues: privateValues
+        )
     )
 
     let entry = try #require(log.load().first)
@@ -39,14 +41,41 @@ import Testing
 }
 
 @MainActor
+@Test func diagnosticLogRedactsBareDomainPathsAndQueries() throws {
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneBareDomainRedactionTests"
+    )
+    defer { directory.remove() }
+    let log = DiagnosticLog(
+        fileURL: directory.url.appendingPathComponent("diagnostics.json")
+    )
+
+    try log.record(
+        .sessionStartFailed,
+        detail: .privateContent(
+            "private.example.com/secret/project?q=BoardAcquisition",
+            privateValues: []
+        )
+    )
+
+    let encodedEntry = String(
+        decoding: try JSONEncoder().encode(try #require(log.load().first)),
+        as: UTF8.self
+    )
+    #expect(!encodedEntry.contains("private.example.com"))
+    #expect(!encodedEntry.contains("secret/project"))
+    #expect(!encodedEntry.contains("BoardAcquisition"))
+}
+
+@MainActor
 @Test func diagnosticLogRetainsOnlyTheLatestTwoHundredEntries() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPaneBoundedDiagnosticTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneBoundedDiagnosticTests"
+    )
+    defer { directory.remove() }
     var timestamp: TimeInterval = 0
     let log = DiagnosticLog(
-        fileURL: directory.appendingPathComponent("diagnostics.json"),
+        fileURL: directory.url.appendingPathComponent("diagnostics.json"),
         now: { Date(timeIntervalSince1970: timestamp) }
     )
 
@@ -63,20 +92,22 @@ import Testing
 
 @MainActor
 @Test func explicitDiagnosticsExportCreatesInspectableLocalArtifact() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StayPaneDiagnosticExportTests")
-        .appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneDiagnosticExportTests"
+    )
+    defer { directory.remove() }
     let log = DiagnosticLog(
-        fileURL: directory.appendingPathComponent("diagnostics.json"),
+        fileURL: directory.url.appendingPathComponent("diagnostics.json"),
         now: { Date(timeIntervalSince1970: 60_000) }
     )
     try log.record(
         .sessionInterrupted,
-        details: "Secret App lost https://private.example.com/session",
-        privateValues: ["Secret App"]
+        detail: .privateContent(
+            "Secret App lost https://private.example.com/session",
+            privateValues: ["Secret App"]
+        )
     )
-    let exportURL = directory.appendingPathComponent("StayPane-Diagnostics.json")
+    let exportURL = directory.url.appendingPathComponent("StayPane-Diagnostics.json")
 
     let writtenURL = try log.export(to: exportURL)
 

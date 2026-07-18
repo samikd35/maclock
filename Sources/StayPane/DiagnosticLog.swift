@@ -19,6 +19,11 @@ struct DiagnosticEntry: Codable, Equatable, Sendable {
     let details: String?
 }
 
+enum DiagnosticDetail: Sendable {
+    case count(Int)
+    case privateContent(String, privateValues: [String])
+}
+
 @MainActor
 final class DiagnosticLog {
     private struct ExportArtifact: Codable {
@@ -30,7 +35,7 @@ final class DiagnosticLog {
 
     private static let maximumEntryCount = 200
 
-    private let file: LocalJSONFile<[DiagnosticEntry]>
+    private let entries: BoundedLocalJSONCollection<DiagnosticEntry>
     private let now: () -> Date
 
     init(
@@ -38,30 +43,42 @@ final class DiagnosticLog {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init
     ) {
-        file = LocalJSONFile(fileURL: fileURL, fileManager: fileManager)
+        entries = BoundedLocalJSONCollection(
+            fileURL: fileURL,
+            maximumCount: Self.maximumEntryCount,
+            fileManager: fileManager
+        )
         self.now = now
     }
 
     func load() throws -> [DiagnosticEntry] {
-        try file.load() ?? []
+        try entries.load()
     }
 
     func record(
         _ event: DiagnosticEvent,
-        details: String? = nil,
-        privateValues: [String] = []
+        detail: DiagnosticDetail? = nil
     ) throws {
-        var entries = try load()
-        entries.append(
+        try entries.append(
             DiagnosticEntry(
                 timestamp: now(),
                 event: event,
-                details: details.map {
-                    Self.redact($0, privateValues: privateValues)
-                }
+                details: Self.persistedDetails(from: detail)
             )
         )
-        try file.save(Array(entries.suffix(Self.maximumEntryCount)))
+    }
+
+    private static func persistedDetails(
+        from detail: DiagnosticDetail?
+    ) -> String? {
+        switch detail {
+        case let .count(count):
+            "count: \(max(0, count))"
+        case let .privateContent(value, privateValues):
+            redact(value, privateValues: privateValues)
+        case nil:
+            nil
+        }
     }
 
     func export(to fileURL: URL) throws -> URL {
@@ -95,18 +112,15 @@ final class DiagnosticLog {
             options: .regularExpression
         )
         return redacted.replacingOccurrences(
-            of: #"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+[a-z]{2,63}\b"#,
+            of: #"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+[a-z]{2,63}\b(?:[/?:#][^\s|\"']*)?"#,
             with: "[REDACTED]",
             options: .regularExpression
         )
     }
 
     private static var defaultFileURL: URL {
-        FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0]
-        .appendingPathComponent("StayPane", isDirectory: true)
-        .appendingPathComponent("diagnostics.json", isDirectory: false)
+        StayPaneStorageLocation.applicationSupportFile(
+            named: "diagnostics.json"
+        )
     }
 }
