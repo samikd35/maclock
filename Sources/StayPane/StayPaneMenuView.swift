@@ -256,7 +256,11 @@ struct StayPaneMenuView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Open Focus Settings") {
-                    model.openFocusSettings()
+                    if !FocusSettingsOpener.open() {
+                        model.showNotice(
+                            "Open System Settings → Focus to silence notifications during a session."
+                        )
+                    }
                 }
                 .buttonStyle(.bordered)
             }

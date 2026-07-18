@@ -9,7 +9,7 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
     private weak var floatingTimerPreferences: FloatingTimerPreferenceModel?
     private var floatingTimerController: FloatingTimerController?
     private var panelController: StayPanePanelController?
-    private var globalShortcutController: GlobalShortcutController?
+    private var openPanelShortcutController: OpenPanelShortcutController?
 
     func configure(
         model: StayPaneModel,
@@ -56,10 +56,10 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
             model: interfaceModel,
             preferences: floatingTimerPreferences
         )
-        globalShortcutController = GlobalShortcutController {
+        openPanelShortcutController = OpenPanelShortcutController {
             panelController.showPanel()
         }
-        if globalShortcutController == nil {
+        if openPanelShortcutController == nil {
             interfaceModel.showNotice(
                 "The ⌃⌥⌘S shortcut is already in use, but the menu-bar panel remains available."
             )

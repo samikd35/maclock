@@ -13,7 +13,6 @@ final class FloatingTimerPreferenceModel: ObservableObject {
     @Published private(set) var value: FloatingTimerPreferences
 
     private enum Key {
-        static let isVisible = "floatingTimerIsVisible"
         static let isCollapsed = "floatingTimerIsCollapsed"
         static let originX = "floatingTimerOriginX"
         static let originY = "floatingTimerOriginY"
@@ -23,9 +22,6 @@ final class FloatingTimerPreferenceModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let storedVisibility = defaults.object(forKey: Key.isVisible) == nil
-            ? true
-            : defaults.bool(forKey: Key.isVisible)
         let origin: CGPoint?
         if defaults.object(forKey: Key.originX) != nil,
            defaults.object(forKey: Key.originY) != nil
@@ -38,7 +34,7 @@ final class FloatingTimerPreferenceModel: ObservableObject {
             origin = nil
         }
         value = FloatingTimerPreferences(
-            isVisible: storedVisibility,
+            isVisible: true,
             isCollapsed: defaults.bool(forKey: Key.isCollapsed),
             origin: origin
         )
@@ -73,7 +69,6 @@ final class FloatingTimerPreferenceModel: ObservableObject {
     }
 
     private func save() {
-        defaults.set(value.isVisible, forKey: Key.isVisible)
         defaults.set(value.isCollapsed, forKey: Key.isCollapsed)
         if let origin = value.origin {
             defaults.set(origin.x, forKey: Key.originX)

@@ -25,6 +25,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var remainingTime: TimeInterval = 0
     @Published private(set) var earlyResetRemainingTime: TimeInterval = 0
     @Published private(set) var notice: String?
+    @Published private var transientSessionPresence: SessionPresence?
 
     private let defaults: UserDefaults
     private let permissionClient: AccessibilityPermissionClient
@@ -35,6 +36,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
+    private var sessionPresenceTask: Task<Void, Never>?
     private var timer: Timer?
     private var quitCoordinator = QuitCoordinator()
     private var addedApplicationIDs: Set<String> = []
@@ -131,11 +133,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     var formattedDuration: String {
-        Self.format(seconds: durationSeconds)
+        formatSessionTime(seconds: durationSeconds)
     }
 
     var formattedRemainingTime: String {
-        Self.format(seconds: max(0, Int(remainingTime.rounded(.up))))
+        formatSessionTime(seconds: max(0, Int(remainingTime.rounded(.up))))
     }
 
     var countdownNumber: Int {
@@ -147,7 +149,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     var formattedEarlyResetRemainingTime: String {
-        Self.format(seconds: earlyResetCountdownNumber)
+        formatSessionTime(seconds: earlyResetCountdownNumber)
     }
 
     var isEarlyResetConfirmationAvailable: Bool {
@@ -168,7 +170,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 resetRemainingSeconds: roundedUpSeconds(earlyResetRemainingTime)
             )
         default:
-            .inactive
+            transientSessionPresence ?? .inactive
         }
     }
 
@@ -367,22 +369,6 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         permissionClient.requestAccess()
         permissionClient.openSystemSettings()
         refreshAccessibilityStatus()
-    }
-
-    func openFocusSettings() {
-        let candidateURLs = [
-            "x-apple.systempreferences:com.apple.Focus-Settings.extension",
-            "x-apple.systempreferences:com.apple.preference.notifications"
-        ]
-        for candidate in candidateURLs {
-            guard let url = URL(string: candidate) else {
-                continue
-            }
-            if NSWorkspace.shared.open(url) {
-                return
-            }
-        }
-        showNotice("Open System Settings → Focus to silence notifications during a session.")
     }
 
     func refreshAccessibilityStatus(forceVerification: Bool = true) {
@@ -599,7 +585,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         let remainder = seconds % 60
 
         if remainder > 0 {
-            return format(seconds: seconds)
+            return formatSessionTime(seconds: seconds)
         }
         if hours > 0, minutes > 0 {
             return "\(hours)h \(minutes)m"
@@ -611,7 +597,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     private func synchronizeWithEngine() {
-        state = engine.state
+        let previousState = state
+        let nextState = engine.state
+        state = nextState
+        updateTransientSessionPresence(from: previousState, to: nextState)
         remainingTime = engine.remainingTime() ?? 0
         earlyResetRemainingTime = engine.earlyResetRemainingTime() ?? 0
         switch state {
@@ -734,15 +723,38 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         max(0, Int(timeInterval.rounded(.up)))
     }
 
-    private static func format(seconds: Int) -> String {
-        let safeSeconds = max(0, seconds)
-        let hours = safeSeconds / 3_600
-        let minutes = (safeSeconds % 3_600) / 60
-        let seconds = safeSeconds % 60
-
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+    private func updateTransientSessionPresence(
+        from previousState: SessionState,
+        to nextState: SessionState
+    ) {
+        let presence: SessionPresence
+        switch nextState {
+        case .completed:
+            guard case .completed = previousState else {
+                presence = .completed
+                break
+            }
+            return
+        case .endedEarly:
+            guard case .endedEarly = previousState else {
+                presence = .endedEarly
+                break
+            }
+            return
+        default:
+            sessionPresenceTask?.cancel()
+            transientSessionPresence = nil
+            return
         }
-        return String(format: "%d:%02d", minutes, seconds)
+
+        transientSessionPresence = presence
+        sessionPresenceTask?.cancel()
+        sessionPresenceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else {
+                return
+            }
+            self?.transientSessionPresence = nil
+        }
     }
 }

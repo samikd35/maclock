@@ -21,7 +21,7 @@ import Testing
 }
 
 @MainActor
-@Test func floatingTimerChoicesAndPositionSurviveRelaunch() {
+@Test func floatingTimerLayoutSurvivesRelaunchWithoutPersistingAHiddenSession() {
     let (defaults, suiteName) = makeDefaults()
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let preferences = FloatingTimerPreferenceModel(defaults: defaults)
@@ -34,7 +34,7 @@ import Testing
     #expect(
         reloaded.value
             == FloatingTimerPreferences(
-                isVisible: false,
+                isVisible: true,
                 isCollapsed: true,
                 origin: CGPoint(x: 320, y: 180)
             )

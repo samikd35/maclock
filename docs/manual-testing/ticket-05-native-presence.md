@@ -1,4 +1,4 @@
-# Ticket 05 manual acceptance: native session presence
+# Ticket 05 manual acceptance: Session Presence
 
 These checks validate menu-bar, panel, floating-window, shortcut, full-screen, and notification-denial behavior that cannot be proven by the pure presentation tests. Build with `make run` and record the macOS version, StayPane commit, and pass/fail result for each section.
 
@@ -15,7 +15,7 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 2. Drag it to another position and, when available, another display. It must remain movable and must not activate blocked content.
 3. Collapse it into the compact pill, then expand it. The remaining time and hide control must remain usable in both forms.
 4. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
-5. Show it, move it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position and collapsed state must be restored. Visibility is also remembered.
+5. Show it, move it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position and collapsed state must be restored. A timer hidden during the prior launch defaults to visible again.
 6. Repeat with an allowed application in native full screen. The Floating Timer must remain available as auxiliary native UI without exiting full screen.
 
 ## Global Open-Panel Shortcut
@@ -30,7 +30,8 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 1. Deny or disable StayPane notification permission if it appears in System Settings.
 2. Repeat setup, active status, Floating Timer controls, normal completion, and the early-reset flow.
 3. Every in-app and menu-bar interaction must remain usable. StayPane does not require notification permission for Ticket 05.
+4. Complete a short Session and verify the menu-bar title briefly says Session Complete while the Status Panel shows its completion state.
 
 ## Automated companion checks
 
-Run `make test`. The tests cover menu-bar presence for active/reset-pending states, persisted Floating Timer visibility/collapse/position, and the invariant that the only registered global shortcut action is Open Panel.
+Run `make test`. The tests cover menu-bar presence for active, reset-pending, and terminal states; persisted Floating Timer position/collapse; session-local hiding; and the single-purpose Open-Panel Shortcut definition.
