@@ -55,7 +55,7 @@ import Testing
             ObservedWindow(
                 id: windowID("00000000-0000-0000-0000-000000000055"),
                 bundleIdentifier: "com.apple.SecurityAgent",
-                relationship: .systemRequired
+                relationship: .essentialSystemInterface
             ),
             true
         )

@@ -147,7 +147,7 @@ public struct TargetSelectionPolicy: Equatable, Sendable {
 public enum WindowRelationship: Equatable, Hashable, Sendable {
     case independent
     case transient(ancestorWindowIdentifiers: [WindowIdentifier])
-    case systemRequired
+    case essentialSystemInterface
 }
 
 public struct ObservedWindow: Equatable, Hashable, Sendable {
@@ -194,7 +194,7 @@ public struct WindowAllowlistPolicy: Equatable, Sendable {
     }
 
     public func allows(_ window: ObservedWindow) -> Bool {
-        if case .systemRequired = window.relationship {
+        if case .essentialSystemInterface = window.relationship {
             return true
         }
         return selectedTargetIdentifier(for: window) != nil
@@ -203,7 +203,7 @@ public struct WindowAllowlistPolicy: Equatable, Sendable {
     public mutating func handleActivation(
         _ window: ObservedWindow
     ) -> WindowActivationDecision {
-        if case .systemRequired = window.relationship {
+        if case .essentialSystemInterface = window.relationship {
             return .allow
         }
         guard let selectedTarget = selectedTargetIdentifier(for: window) else {

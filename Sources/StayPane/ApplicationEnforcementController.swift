@@ -178,12 +178,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             try enforce(windows: windows, applicationName: applicationTarget.displayName)
 
             guard let focusedWindow = windows.first(where: \.isFocused) else {
-                if !allowedTargets.contains(where: {
-                    if case let .application(target) = $0 {
-                        return target.bundleIdentifier == bundleIdentifier
-                    }
-                    return false
-                }) {
+                if !isEntireApplicationAllowed(bundleIdentifier: bundleIdentifier) {
                     restoreAllowedFocus(preferredTarget: nil)
                     publishBlockedNotice(
                         "\(applicationTarget.displayName) is outside this focus session."

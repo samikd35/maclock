@@ -61,24 +61,24 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 04 — Enforce individual window targets precisely
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Let users expand applications and allow exact windows while keeping sibling and future independent windows blocked. Preserve the real desktop state across completion and early reset.
 
 **Blocked by:** 03 — Support multiple and closed application targets.
 
-- [ ] Running application rows expand to show their current windows by title.
-- [ ] Hovering a window entry outlines the real window without taking a screenshot or requesting Screen Recording permission.
-- [ ] Selecting an application disables redundant child-window controls; deselecting it restores precise window choices.
-- [ ] An individually selected window remains allowed while sibling and newly created independent windows from the same application are blocked.
-- [ ] Closing an individually selected window removes its availability; reopening creates a new blocked window.
-- [ ] Closing every user-selected target leaves the session running with StayPane still accessible.
-- [ ] Essential macOS authentication, permission, and critical-alert UI remains accessible.
-- [ ] Temporary sheets and modal dialogs belonging to an allowed window work without allowing unrelated independent windows.
-- [ ] Enforcement and documented manual checks cover multiple displays, Spaces, and allowed full-screen windows.
-- [ ] StayPane does not move, resize, or intentionally change the display or Space of allowed windows.
-- [ ] Restoration affects only windows StayPane minimized; pre-minimized windows stay minimized and user-closed windows are not reopened.
-- [ ] A restoration failure for one window is reported without preventing other windows from restoring or the session from unlocking.
+- [x] Running application rows expand to show their current windows by title.
+- [x] Hovering a window entry outlines the real window without taking a screenshot or requesting Screen Recording permission.
+- [x] Selecting an application disables redundant child-window controls; deselecting it restores precise window choices.
+- [x] An individually selected window remains allowed while sibling and newly created independent windows from the same application are blocked.
+- [x] Closing an individually selected window removes its availability; reopening creates a new blocked window.
+- [x] Closing every user-selected target leaves the session running with StayPane still accessible.
+- [x] Essential macOS authentication, permission, and critical-alert UI remains accessible.
+- [x] Temporary sheets and modal dialogs belonging to an allowed window work without allowing unrelated independent windows.
+- [x] Enforcement and documented manual checks cover multiple displays, Spaces, and allowed full-screen windows.
+- [x] StayPane does not move, resize, or intentionally change the display or Space of allowed windows.
+- [x] Restoration affects only windows StayPane minimized; pre-minimized windows stay minimized and user-closed windows are not reopened.
+- [x] A restoration failure for one window is reported without preventing other windows from restoring or the session from unlocking.
 
 ## 05 — Deliver the menu-bar and floating-timer experience
 

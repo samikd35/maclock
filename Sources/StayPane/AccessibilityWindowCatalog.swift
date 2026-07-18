@@ -280,7 +280,7 @@ final class AccessibilityWindowCatalog {
         bundleIdentifier: String
     ) -> WindowRelationship {
         if Self.essentialSystemBundleIdentifiers.contains(bundleIdentifier) {
-            return .systemRequired
+            return .essentialSystemInterface
         }
 
         let ancestors = ancestorIdentifiers(
