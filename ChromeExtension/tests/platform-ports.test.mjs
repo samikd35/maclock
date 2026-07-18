@@ -14,7 +14,9 @@ test("serializes an end command behind an in-flight begin command", async () => 
     releaseBegin = resolve;
   });
   let enforced = false;
-  const queue = new NativeCommandQueue(() => assert.fail("command failed"));
+  const queue = new NativeCommandQueue(async () => {
+    assert.fail("command failed");
+  });
 
   queue.enqueue(async () => {
     await beginCanFinish;
@@ -27,6 +29,32 @@ test("serializes an end command behind an in-flight begin command", async () => 
   await queue.drain();
 
   assert.equal(enforced, false);
+});
+
+test("runs local fail-open cleanup when a native command fails", async () => {
+  let releaseBegin;
+  const beginCanFinish = new Promise((resolve) => {
+    releaseBegin = resolve;
+  });
+  let enforced = false;
+  let cleanedUp = false;
+  const queue = new NativeCommandQueue(async () => {
+    enforced = false;
+    cleanedUp = true;
+  });
+
+  queue.enqueue(async () => {
+    await beginCanFinish;
+    enforced = true;
+  });
+  queue.enqueue(async () => {
+    throw new Error("malformed native command");
+  });
+  releaseBegin();
+  await queue.drain();
+
+  assert.equal(enforced, false);
+  assert.equal(cleanedUp, true);
 });
 
 test("tab activation storage is isolated behind its port", async () => {

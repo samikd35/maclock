@@ -1112,15 +1112,15 @@ struct StayPaneMenuView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(model.isActiveSession ? "Quit…" : "Quit") {
+                Button(model.hasProtectedSession ? "Quit…" : "Quit") {
                     if model.handleQuitRequest() {
                         NSApplication.shared.terminate(nil)
                     }
                 }
                 .buttonStyle(.plain)
                 .help(
-                    model.isActiveSession
-                        ? "Quit uses the same 30-second early-reset flow"
+                    model.hasProtectedSession
+                        ? "Quit waits for Recovery, then uses the same 30-second early-reset flow"
                         : "Quit StayPane"
                 )
             }

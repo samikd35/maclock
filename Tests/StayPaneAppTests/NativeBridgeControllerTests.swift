@@ -118,6 +118,80 @@ import Testing
 }
 
 @MainActor
+@Test func recoveryWaitsForChromeToReconnectAndConfirmTheSavedTab() throws {
+    let currentTime = Date(timeIntervalSince1970: 1_000)
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(
+        socketURL: socketURL,
+        now: { currentTime }
+    )
+    let target = try savedBrowserTarget(profileIdentifier: "profile-late")
+
+    #expect(
+        try controller.resume(allowing: [target]) == .awaitingAvailability
+    )
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: "profile-late"
+        )
+    )
+    #expect(
+        try controller.resume(allowing: [target]) == .awaitingAvailability
+    )
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: "profile-late",
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 1,
+                    windowIdentifier: 1,
+                    title: "Saved tab",
+                    url: "https://example.com",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    #expect(
+        try controller.resume(allowing: [target]) == .awaitingConfirmation
+    )
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabActivationStarted(
+            profileIdentifier: "profile-late",
+            tabIdentifier: 1,
+            windowIdentifier: 1
+        )
+    )
+    try controller.poll()
+    #expect(try controller.resume(allowing: [target]) == .active)
+}
+
+@MainActor
+@Test func recoveryFailsOpenAfterTheChromeAvailabilityDeadline() throws {
+    var currentTime = Date(timeIntervalSince1970: 1_000)
+    let controller = try NativeBridgeController(
+        socketURL: temporaryBridgeSocketURL(),
+        now: { currentTime }
+    )
+    let target = try savedBrowserTarget(profileIdentifier: "profile-missing")
+
+    #expect(
+        try controller.resume(allowing: [target]) == .awaitingAvailability
+    )
+    currentTime = currentTime.addingTimeInterval(5)
+    #expect(throws: NativeBridgeError.disconnected) {
+        try controller.resume(allowing: [target])
+    }
+}
+
+@MainActor
 @Test func extensionStartFailureIsReportedBeforeActivationIsConfirmed() throws {
     let socketURL = temporaryBridgeSocketURL()
     let controller = try NativeBridgeController(socketURL: socketURL)
@@ -269,4 +343,23 @@ private func temporaryBridgeSocketURL() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("sp-\(UUID().uuidString)")
         .appendingPathComponent("bridge.sock")
+}
+
+private func savedBrowserTarget(
+    profileIdentifier: String
+) throws -> BrowserTabTarget {
+    BrowserTabTarget(
+        profileIdentifier: BrowserProfileIdentifier(
+            rawValue: profileIdentifier
+        ),
+        tabIdentifier: BrowserTabIdentifier(rawValue: 1),
+        windowIdentifier: BrowserWindowIdentifier(rawValue: 1),
+        title: "Saved tab",
+        url: try #require(URL(string: "https://example.com")),
+        faviconPNGData: nil,
+        application: ApplicationTarget(
+            displayName: "Google Chrome",
+            bundleIdentifier: "com.google.Chrome"
+        )
+    )
 }

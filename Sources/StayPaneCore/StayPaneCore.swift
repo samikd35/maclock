@@ -415,6 +415,16 @@ public enum SessionState: Equatable, Sendable {
     case completed(CompletedSession)
     case endedEarly(EndedEarlySession)
     case interrupted(InterruptedSession)
+
+    public var requiresControlledQuit: Bool {
+        switch self {
+        case .recovering, .enforcing, .resetPending:
+            true
+        case .idle, .configuring, .ready, .starting,
+             .completed, .endedEarly, .interrupted:
+            false
+        }
+    }
 }
 
 public enum SessionEngineError: Error, Equatable {
@@ -431,6 +441,10 @@ public enum QuitDecision: Equatable, Sendable {
 
 public struct QuitCoordinator: Equatable, Sendable {
     private var isQuitPending = false
+
+    public var hasPendingQuitRequest: Bool {
+        isQuitPending
+    }
 
     public init() {}
 

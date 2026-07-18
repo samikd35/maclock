@@ -61,7 +61,9 @@ async function ensureNativeConnection(): Promise<void> {
     const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     nativePort = port;
     connectedProfileIdentifier = null;
-    const commandQueue = new NativeCommandQueue(() => port.disconnect());
+    const commandQueue = new NativeCommandQueue(
+      async () => handleNativePortUnavailable(port),
+    );
     port.onMessage.addListener((message: unknown) => {
       commandQueue.enqueue(async () => {
         await handleNativeMessage(port, profileIdentifier, message);
@@ -69,18 +71,34 @@ async function ensureNativeConnection(): Promise<void> {
     });
     port.onDisconnect.addListener(() => {
       void chrome.runtime.lastError;
-      if (nativePort === port) {
-        nativePort = null;
-        connectedProfileIdentifier = null;
-        commandQueue.enqueue(stopTabActivationEnforcement);
-        scheduleReconnect();
-      }
+      commandQueue.enqueue(
+        async () => handleNativePortUnavailable(port),
+      );
     });
     port.postMessage(makeHello(profileIdentifier));
   } catch {
     nativePort = null;
     connectedProfileIdentifier = null;
     await stopTabActivationEnforcement();
+    scheduleReconnect();
+  }
+}
+
+async function handleNativePortUnavailable(
+  port: chrome.runtime.Port,
+): Promise<void> {
+  const wasCurrentConnection = nativePort === port;
+  if (wasCurrentConnection) {
+    nativePort = null;
+    connectedProfileIdentifier = null;
+  }
+  port.disconnect();
+  if (!wasCurrentConnection) {
+    return;
+  }
+  try {
+    await stopTabActivationEnforcement();
+  } finally {
     scheduleReconnect();
   }
 }

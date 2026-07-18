@@ -20,6 +20,7 @@ public extension TabActivationEnforcing {
 }
 
 public enum TabActivationStartResult: Equatable, Sendable {
+    case awaitingAvailability
     case awaitingConfirmation
     case active
 }

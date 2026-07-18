@@ -58,3 +58,21 @@ import Testing
     )
     #expect(shouldTerminate == false)
 }
+
+@Test func aPendingQuitRemainsDeferredWhileRecoveryIsProtected() {
+    var coordinator = QuitCoordinator()
+
+    #expect(
+        coordinator.requestQuit(
+            isSessionActive: true,
+            pendingRestorationCount: 0
+        ) == .beginEarlyReset
+    )
+    #expect(coordinator.hasPendingQuitRequest)
+    #expect(
+        coordinator.consumeQuitWhenSafe(
+            isSessionActive: true,
+            pendingRestorationCount: 0
+        ) == false
+    )
+}

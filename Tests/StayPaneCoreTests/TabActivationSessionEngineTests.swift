@@ -152,6 +152,7 @@ import Testing
         Issue.record("Recovery must wait for the extension confirmation.")
         return
     }
+    #expect(engine.state.requiresControlledQuit)
     #expect(native.startedTargets.isEmpty)
 
     browser.startResult = .active

@@ -4,7 +4,7 @@ import Foundation
 final class CoordinatedSessionEnforcement {
     private enum State {
         case idle
-        case awaitingTabConfirmation
+        case awaitingTabActivation
         case active
     }
 
@@ -35,15 +35,15 @@ final class CoordinatedSessionEnforcement {
                 allowing: tabTargets(in: targets)
             )
         } catch {
-            if case .awaitingTabConfirmation = state {
+            if case .awaitingTabActivation = state {
                 tabActivationEnforcement.stop()
             }
             state = .idle
             throw error
         }
         guard tabStartResult == .active else {
-            state = .awaitingTabConfirmation
-            return .awaitingTabConfirmation
+            state = .awaitingTabActivation
+            return .awaitingTabActivation
         }
         do {
             try applicationAndWindowEnforcement.start(
@@ -64,8 +64,8 @@ final class CoordinatedSessionEnforcement {
         guard try tabActivationEnforcement.resume(
             allowing: tabTargets(in: targets)
         ) == .active else {
-            state = .awaitingTabConfirmation
-            return .awaitingTabConfirmation
+            state = .awaitingTabActivation
+            return .awaitingTabActivation
         }
         do {
             try applicationAndWindowEnforcement.resume(
@@ -89,7 +89,7 @@ final class CoordinatedSessionEnforcement {
         switch state {
         case .idle:
             break
-        case .awaitingTabConfirmation:
+        case .awaitingTabActivation:
             tabActivationEnforcement.stop()
         case .active:
             applicationAndWindowEnforcement.stop()
@@ -134,6 +134,6 @@ final class CoordinatedSessionEnforcement {
 }
 
 enum CoordinatedSessionEnforcementResult: Equatable {
-    case awaitingTabConfirmation
+    case awaitingTabActivation
     case active
 }

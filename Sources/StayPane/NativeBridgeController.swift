@@ -29,6 +29,8 @@ extension NativeBridgeError: LocalizedError {
 
 @MainActor
 final class NativeBridgeController: TabActivationEnforcing {
+    private static let recoveryAvailabilityTimeout: TimeInterval = 5
+
     private enum TabActivationState {
         case idle
         case awaitingConfirmation(BrowserTabTarget, deadline: Date)
@@ -58,6 +60,7 @@ final class NativeBridgeController: TabActivationEnforcing {
     ] = [:]
     private var tabActivationState: TabActivationState = .idle
     private var enforcementFailure: NativeBridgeError?
+    private var recoveryAvailabilityDeadline: Date?
 
     var onChange: (() -> Void)?
     var onBlockedTabActivation: (() -> Void)?
@@ -190,6 +193,29 @@ final class NativeBridgeController: TabActivationEnforcing {
         return .awaitingConfirmation
     }
 
+    func resume(
+        allowing targets: [BrowserTabTarget]
+    ) throws -> TabActivationStartResult {
+        do {
+            let result = try start(allowing: targets)
+            recoveryAvailabilityDeadline = nil
+            return result
+        } catch let error as NativeBridgeError {
+            guard error == .disconnected || error == .targetMissing else {
+                recoveryAvailabilityDeadline = nil
+                throw error
+            }
+            let deadline = recoveryAvailabilityDeadline
+                ?? now().addingTimeInterval(Self.recoveryAvailabilityTimeout)
+            recoveryAvailabilityDeadline = deadline
+            guard now() >= deadline else {
+                return .awaitingAvailability
+            }
+            recoveryAvailabilityDeadline = nil
+            throw error
+        }
+    }
+
     func refresh() throws {
         try poll()
         if let enforcementFailure {
@@ -201,6 +227,7 @@ final class NativeBridgeController: TabActivationEnforcing {
     }
 
     func stop() {
+        recoveryAvailabilityDeadline = nil
         guard let target = tabActivationState.target else {
             enforcementFailure = nil
             return

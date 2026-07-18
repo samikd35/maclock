@@ -282,6 +282,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         sessionPresence.isEnforcing
     }
 
+    var hasProtectedSession: Bool {
+        state.requiresControlledQuit
+    }
+
     var sessionPresence: SessionPresence {
         switch state {
         case .enforcing:
@@ -694,7 +698,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func handleQuitRequest() -> Bool {
         let decision = quitCoordinator.requestQuit(
-            isSessionActive: isActiveSession,
+            isSessionActive: hasProtectedSession,
             pendingRestorationCount: enforcement.pendingRestorationCount
         )
 
@@ -708,6 +712,13 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             return false
 
         case .beginEarlyReset:
+            if case .recovering = state {
+                showNotice(
+                    "StayPane will continue the controlled Quit after saved Session verification finishes."
+                )
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                return false
+            }
             requestEarlyReset()
             NSApplication.shared.activate(ignoringOtherApps: true)
             return false
@@ -797,6 +808,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             showNotice(error.localizedDescription)
         }
         synchronizeWithEngine()
+        continueDeferredQuitAfterRecovery()
         terminateIfQuitRequestFinished()
     }
 
@@ -1079,7 +1091,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func terminateIfQuitRequestFinished() {
         guard quitCoordinator.consumeQuitWhenSafe(
-            isSessionActive: isActiveSession,
+            isSessionActive: hasProtectedSession,
             pendingRestorationCount: enforcement.pendingRestorationCount
         ) else {
             return
@@ -1087,6 +1099,15 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
         timer?.invalidate()
         NSApplication.shared.terminate(nil)
+    }
+
+    private func continueDeferredQuitAfterRecovery() {
+        guard quitCoordinator.hasPendingQuitRequest,
+              case .enforcing = state
+        else {
+            return
+        }
+        requestEarlyReset()
     }
 
     private func durationFromEngine() -> Int {
