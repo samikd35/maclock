@@ -212,31 +212,21 @@ struct StayPaneMenuView: View {
                 Text("Allowed targets")
                     .font(.headline)
                 ForEach(model.configuredTargets, id: \.id) { target in
-                    switch target {
-                    case let .application(application):
-                        reviewRow(
-                            title: "Entire application",
-                            value: application.displayName,
-                            systemImage: "macwindow"
-                        )
-                    case let .window(window):
-                        reviewRow(
-                            title: "Individual window in \(window.application.displayName)",
-                            value: window.title,
-                            systemImage: "macwindow.on.rectangle"
-                        )
-                    }
+                    let presentation = targetPresentation(target)
+                    reviewRow(
+                        title: presentation.reviewTitle,
+                        value: presentation.reviewValue,
+                        systemImage: presentation.systemImage
+                    )
                 }
             }
             if model.configuredTargets.contains(where: {
-                if case .application = $0 { return true }
-                return false
+                targetPresentation($0).isBroadApplication
             }) {
                 broadApplicationWarning
             }
             if model.configuredTargets.contains(where: {
-                if case .window = $0 { return true }
-                return false
+                !targetPresentation($0).isBroadApplication
             }) {
                 preciseWindowNote
             }
@@ -490,7 +480,7 @@ struct StayPaneMenuView: View {
                                 )
                             ) {
                                 Label(
-                                    window.target.title,
+                                    window.title,
                                     systemImage: "macwindow"
                                 )
                                 .font(.subheadline)
@@ -560,7 +550,7 @@ struct StayPaneMenuView: View {
     private func targetNames(_ targets: [SessionTarget]) -> String {
         let names = targets.map(targetLabel)
         if names.count <= 1 {
-            return names.first ?? "your selected applications"
+            return names.first ?? "your selected targets"
         }
         if names.count == 2 {
             return names.joined(separator: " and ")
@@ -571,12 +561,38 @@ struct StayPaneMenuView: View {
     }
 
     private func targetLabel(_ target: SessionTarget) -> String {
+        targetPresentation(target).label
+    }
+
+    private func targetPresentation(
+        _ target: SessionTarget
+    ) -> TargetPresentation {
         switch target {
         case let .application(application):
-            application.displayName
+            TargetPresentation(
+                label: application.displayName,
+                reviewTitle: "Entire application",
+                reviewValue: application.displayName,
+                systemImage: "macwindow",
+                isBroadApplication: true
+            )
         case let .window(window):
-            "\(window.title) in \(window.application.displayName)"
+            TargetPresentation(
+                label: "\(window.title) in \(window.application.displayName)",
+                reviewTitle: "Individual window in \(window.application.displayName)",
+                reviewValue: window.title,
+                systemImage: "macwindow.on.rectangle",
+                isBroadApplication: false
+            )
         }
+    }
+
+    private struct TargetPresentation {
+        let label: String
+        let reviewTitle: String
+        let reviewValue: String
+        let systemImage: String
+        let isBroadApplication: Bool
     }
 
     private func reviewRow(title: String, value: String, systemImage: String) -> some View {

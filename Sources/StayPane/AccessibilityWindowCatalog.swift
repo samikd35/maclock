@@ -136,14 +136,6 @@ final class SystemAccessibilityWindowProvider: AccessibilityWindowProviding {
     }
 }
 
-struct AccessibilityWindowCatalogItem: Identifiable {
-    let target: WindowTarget
-
-    var id: WindowIdentifier {
-        target.id
-    }
-}
-
 struct CataloguedAccessibilityWindow {
     let target: WindowTarget
     let element: AXUIElement
@@ -170,9 +162,16 @@ final class AccessibilityWindowCatalog {
 
     func loadWindows(
         for application: ApplicationTarget
-    ) throws -> [AccessibilityWindowCatalogItem] {
-        try catalogueWindows(for: application).map {
-            AccessibilityWindowCatalogItem(target: $0.target)
+    ) throws -> [WindowTarget] {
+        try catalogueWindows(for: application).map(\.target)
+    }
+
+    func unavailableWindowTargets(in targets: [SessionTarget]) -> [WindowTarget] {
+        targets.compactMap { target in
+            guard case let .window(window) = target, !isAvailable(window) else {
+                return nil
+            }
+            return window
         }
     }
 
@@ -280,9 +279,7 @@ final class AccessibilityWindowCatalog {
         identifiers: [WindowIdentifier],
         bundleIdentifier: String
     ) -> WindowRelationship {
-        if Self.essentialSystemBundleIdentifiers.contains(bundleIdentifier)
-            || descriptor.subrole == "AXSystemDialog"
-        {
+        if Self.essentialSystemBundleIdentifiers.contains(bundleIdentifier) {
             return .systemRequired
         }
 
@@ -294,6 +291,8 @@ final class AccessibilityWindowCatalog {
         let isTransient = descriptor.role == "AXSheet"
             || descriptor.isModal
             || descriptor.subrole == "AXDialog"
+            || descriptor.subrole == "AXFloatingWindow"
+            || descriptor.subrole == "AXSystemFloatingWindow"
         if isTransient, !ancestors.isEmpty {
             return .transient(ancestorWindowIdentifiers: ancestors)
         }
@@ -339,10 +338,7 @@ final class AccessibilityWindowCatalog {
     private static let essentialSystemBundleIdentifiers: Set<String> = [
         "com.apple.CoreServicesUIAgent",
         "com.apple.SecurityAgent",
-        "com.apple.UserNotificationCenter",
-        "com.apple.controlcenter",
         "com.apple.loginwindow",
-        "com.apple.notificationcenterui",
         "com.apple.systemuiserver"
     ]
 }

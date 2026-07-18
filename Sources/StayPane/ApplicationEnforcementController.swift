@@ -37,7 +37,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         restorationTracker.pendingCount
     }
 
-    private let permissionClient: AccessibilityPermissionClient
+    private let permissionClient: any AccessibilityPermissionChecking
     private let availabilityResolver: any ApplicationAvailabilityResolving
     private let windowCatalog: AccessibilityWindowCatalog
     private let notificationCenter: NotificationCenter
@@ -52,7 +52,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     private static let fullScanInterval: TimeInterval = 0.25
 
     init(
-        permissionClient: AccessibilityPermissionClient,
+        permissionClient: any AccessibilityPermissionChecking,
         availabilityResolver: any ApplicationAvailabilityResolving,
         windowCatalog: AccessibilityWindowCatalog = AccessibilityWindowCatalog(),
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -86,14 +86,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             throw ApplicationEnforcementError.accessibilityPermissionMissing
         }
 
-        let unavailableWindows = targets.compactMap { target -> WindowTarget? in
-            guard case let .window(window) = target,
-                  !windowCatalog.isAvailable(window)
-            else {
-                return nil
-            }
-            return window
-        }
+        let unavailableWindows = windowCatalog.unavailableWindowTargets(in: targets)
         guard unavailableWindows.isEmpty else {
             throw ApplicationEnforcementError.allowedWindowsUnavailable(
                 unavailableWindows.map(\.title)

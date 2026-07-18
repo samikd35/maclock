@@ -55,6 +55,11 @@ import Testing
     #expect(referenceDecision == .allow)
     #expect(editorDecision == .allow)
     #expect(
-        blockedDecision == .block(refocusTarget: .window(editorWindow.id))
+        blockedDecision
+            == .block(
+                refocusTarget: .application(
+                    bundleIdentifier: editor.bundleIdentifier
+                )
+            )
     )
 }

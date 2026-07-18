@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Specifications and implementation tickets are tracked as Local Markdown under `.scratch/`; external pull requests are not currently a triage surface. See `docs/agents/issue-tracker.md`.
+Specifications and implementation tickets are tracked as Local Markdown. StayPane currently keeps its PRD under `.scratch/` and its aggregate implementation queue in `tickets.md`; external pull requests are not currently a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

@@ -41,3 +41,11 @@ The isolated restoration-failure path is also covered without touching desktop w
 ## Automated companion checks
 
 Run `make test`. The suite covers target hierarchy, exact versus new window identity, transient-child policy, the session continuing after all exact targets close, pre-minimized and closed-window restoration, and isolated restoration failures.
+
+For an opt-in check of the real Accessibility discovery/minimize/restore/raise adapter against a window created by the test itself, grant Accessibility access to the test host and run:
+
+```sh
+STAYPANE_RUN_AX_INTEGRATION_TESTS=1 swift test --filter systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn
+```
+
+The ordinary test suite never moves or minimizes unrelated desktop windows.

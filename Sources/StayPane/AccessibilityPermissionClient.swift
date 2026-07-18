@@ -2,7 +2,13 @@ import AppKit
 import ApplicationServices
 
 @MainActor
-final class AccessibilityPermissionClient {
+protocol AccessibilityPermissionChecking: AnyObject {
+    var isGranted: Bool { get }
+    func verifyWindowControl() -> Bool
+}
+
+@MainActor
+final class AccessibilityPermissionClient: AccessibilityPermissionChecking {
     var isGranted: Bool {
         AXIsProcessTrusted()
     }

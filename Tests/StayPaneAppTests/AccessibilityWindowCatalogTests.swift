@@ -32,7 +32,7 @@ import Testing
     let original = try #require(catalog.loadWindows(for: application).first)
     provider.descriptors = []
     _ = try catalog.loadWindows(for: application)
-    #expect(!catalog.isAvailable(original.target))
+    #expect(!catalog.isAvailable(original))
 
     provider.descriptors = [
         AccessibilityWindowDescriptor(
@@ -48,8 +48,8 @@ import Testing
     ]
     let reopened = try #require(catalog.loadWindows(for: application).first)
 
-    #expect(reopened.target.title == original.target.title)
-    #expect(reopened.target.id != original.target.id)
+    #expect(reopened.title == original.title)
+    #expect(reopened.id != original.id)
 }
 
 @MainActor
@@ -95,6 +95,64 @@ import Testing
         sheet.observation.relationship
             == .transient(ancestorWindowIdentifiers: [parent.target.id])
     )
+}
+
+@MainActor
+@Test func attachedUtilityIsTransientButAnOrdinarySystemDialogIsNotExempt() throws {
+    let parentElement = AXUIElementCreateApplication(721)
+    let utilityElement = AXUIElementCreateApplication(722)
+    let dialogElement = AXUIElementCreateApplication(723)
+    let provider = FakeAccessibilityWindowProvider(
+        descriptors: [
+            AccessibilityWindowDescriptor(
+                element: parentElement,
+                title: "Draft",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: false,
+                parentElement: nil,
+                frame: .zero
+            ),
+            AccessibilityWindowDescriptor(
+                element: utilityElement,
+                title: "Inspector",
+                role: "AXWindow",
+                subrole: "AXFloatingWindow",
+                isModal: false,
+                isFocused: false,
+                parentElement: parentElement,
+                frame: .zero
+            ),
+            AccessibilityWindowDescriptor(
+                element: dialogElement,
+                title: "Unrelated Dialog",
+                role: "AXWindow",
+                subrole: "AXSystemDialog",
+                isModal: false,
+                isFocused: true,
+                parentElement: nil,
+                frame: .zero
+            )
+        ]
+    )
+    let catalog = AccessibilityWindowCatalog(provider: provider)
+    let application = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 72
+    )
+
+    let windows = try catalog.catalogueWindows(for: application)
+    let parent = try #require(windows.first { $0.target.title == "Draft" })
+    let utility = try #require(windows.first { $0.target.title == "Inspector" })
+    let dialog = try #require(windows.first { $0.target.title == "Unrelated Dialog" })
+
+    #expect(
+        utility.observation.relationship
+            == .transient(ancestorWindowIdentifiers: [parent.target.id])
+    )
+    #expect(dialog.observation.relationship == .independent)
 }
 
 @MainActor

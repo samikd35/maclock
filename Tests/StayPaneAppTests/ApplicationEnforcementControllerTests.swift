@@ -46,6 +46,26 @@ import Testing
 }
 
 @MainActor
+@Test func enforcementRefusesToStartWithoutAccessibilityPermission() {
+    let controller = ApplicationEnforcementController(
+        permissionClient: FakePermissionChecker(isGranted: false),
+        availabilityResolver: FakeApplicationAvailabilityResolver(available: true),
+        notificationCenter: NotificationCenter(),
+        windowOperator: UnusedWindowOperator()
+    )
+    let target = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor"
+    )
+
+    #expect(
+        throws: ApplicationEnforcementError.accessibilityPermissionMissing
+    ) {
+        try controller.start(allowing: [.application(target)])
+    }
+}
+
+@MainActor
 private final class EnforcementTestClock: SessionClock {
     var now: Date
     var continuousNow: TimeInterval = 0
@@ -70,6 +90,19 @@ private final class FakeApplicationAvailabilityResolver: ApplicationAvailability
 
     func isAvailable(_ target: ApplicationTarget) -> Bool {
         available
+    }
+}
+
+@MainActor
+private final class FakePermissionChecker: AccessibilityPermissionChecking {
+    let isGranted: Bool
+
+    init(isGranted: Bool) {
+        self.isGranted = isGranted
+    }
+
+    func verifyWindowControl() -> Bool {
+        isGranted
     }
 }
 

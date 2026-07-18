@@ -12,7 +12,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var state: SessionState = .idle
     @Published private(set) var applications: [ApplicationCatalogItem] = []
     @Published private(set) var windowsByApplicationID: [
-        String: [AccessibilityWindowCatalogItem]
+        String: [WindowTarget]
     ] = [:]
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
     @Published var expandedApplicationIDs: Set<String> = []
@@ -247,7 +247,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
 
         if isSelected {
-            engine.select(target: .window(window.target))
+            engine.select(target: SessionTarget.window(window))
         } else {
             engine.deselectTarget(.window(id))
         }
@@ -264,7 +264,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
     }
 
-    func windows(for applicationID: String) -> [AccessibilityWindowCatalogItem] {
+    func windows(for applicationID: String) -> [WindowTarget] {
         windowsByApplicationID[applicationID] ?? []
     }
 
@@ -278,7 +278,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             .joined()
             .first(where: { $0.id == id })
         {
-            _ = try? windowCatalog.loadWindows(for: window.target.application)
+            _ = try? windowCatalog.loadWindows(for: window.application)
         }
         guard let frame = windowCatalog.frame(for: id) else {
             outlineController.hide()
@@ -405,14 +405,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             )
             return
         }
-        let unavailableWindows = configuredTargets.compactMap { target -> WindowTarget? in
-            guard case let .window(window) = target,
-                  !windowCatalog.isAvailable(window)
-            else {
-                return nil
-            }
-            return window
-        }
+        let unavailableWindows = windowCatalog.unavailableWindowTargets(
+            in: configuredTargets
+        )
         guard unavailableWindows.isEmpty else {
             showNotice(
                 "Choose reopened versions of these closed windows: "

@@ -1,6 +1,6 @@
 # Issue tracker: Local Markdown
 
-Specifications and tickets for StayPane live as Markdown files under `.scratch/`.
+Specifications and tickets for StayPane are Local Markdown. The current StayPane PRD is `.scratch/staypane/PRD.md`, and its authoritative aggregate implementation queue is [`tickets.md`](../../tickets.md). New feature trackers may use the per-feature layout below when tickets are published individually.
 
 ## Conventions
 
@@ -17,7 +17,7 @@ When a skill says “publish to the issue tracker,” create the appropriate fil
 
 ## Fetching tickets
 
-Read the referenced Markdown file. The user will normally provide its path or ticket number.
+Read the referenced Markdown file. For a StayPane ticket number, read the matching numbered section in [`tickets.md`](../../tickets.md). The user will normally provide its path or ticket number.
 
 ## Future migration
 

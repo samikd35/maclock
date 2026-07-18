@@ -51,7 +51,7 @@ public struct WindowIdentifier: RawRepresentable, Equatable, Hashable, Sendable 
     }
 }
 
-public struct WindowTarget: Equatable, Hashable, Sendable {
+public struct WindowTarget: Equatable, Hashable, Identifiable, Sendable {
     public let id: WindowIdentifier
     public let title: String
     public let application: ApplicationTarget
@@ -94,23 +94,6 @@ public enum SessionTarget: Equatable, Hashable, Sendable {
         }
     }
 
-    public var displayName: String {
-        switch self {
-        case let .application(application):
-            application.displayName
-        case let .window(window):
-            window.title
-        }
-    }
-
-    public var application: ApplicationTarget {
-        switch self {
-        case let .application(application):
-            application
-        case let .window(window):
-            window.application
-        }
-    }
 }
 
 public struct TargetSelectionPolicy: Equatable, Sendable {
@@ -214,34 +197,42 @@ public struct WindowAllowlistPolicy: Equatable, Sendable {
         if case .systemRequired = window.relationship {
             return true
         }
-        if allowedApplicationBundleIdentifiers.contains(window.bundleIdentifier) {
-            return true
-        }
-        if allowedWindowIdentifiers.contains(window.id) {
-            return true
-        }
-        if case let .transient(ancestorWindowIdentifiers) = window.relationship {
-            return !allowedWindowIdentifiers.isDisjoint(
-                with: ancestorWindowIdentifiers
-            )
-        }
-        return false
+        return selectedTargetIdentifier(for: window) != nil
     }
 
     public mutating func handleActivation(
         _ window: ObservedWindow
     ) -> WindowActivationDecision {
-        guard allows(window) else {
+        if case .systemRequired = window.relationship {
+            return .allow
+        }
+        guard let selectedTarget = selectedTargetIdentifier(for: window) else {
             return .block(
                 refocusTarget: lastActivatedAllowedTarget ?? fallbackTarget
             )
         }
 
-        if case .systemRequired = window.relationship {
-            return .allow
-        }
-        lastActivatedAllowedTarget = .window(window.id)
+        lastActivatedAllowedTarget = selectedTarget
         return .allow
+    }
+
+    private func selectedTargetIdentifier(
+        for window: ObservedWindow
+    ) -> TargetIdentifier? {
+        if allowedApplicationBundleIdentifiers.contains(window.bundleIdentifier) {
+            return .application(bundleIdentifier: window.bundleIdentifier)
+        }
+        if allowedWindowIdentifiers.contains(window.id) {
+            return .window(window.id)
+        }
+        guard case let .transient(ancestorWindowIdentifiers) = window.relationship,
+              let selectedAncestor = ancestorWindowIdentifiers.first(where: {
+                  allowedWindowIdentifiers.contains($0)
+              })
+        else {
+            return nil
+        }
+        return .window(selectedAncestor)
     }
 }
 

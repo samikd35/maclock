@@ -139,6 +139,40 @@ import Testing
     )
 }
 
+@Test func activatingTransientUIKeepsItsSelectedParentAsTheFocusTarget() {
+    let selectedID = windowID("00000000-0000-0000-0000-000000000064")
+    let sheetID = windowID("00000000-0000-0000-0000-000000000065")
+    let blockedID = windowID("00000000-0000-0000-0000-000000000066")
+    let application = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor"
+    )
+    let selectedWindow = WindowTarget(
+        id: selectedID,
+        title: "Draft",
+        application: application
+    )
+    var policy = WindowAllowlistPolicy(targets: [.window(selectedWindow)])
+
+    let transientDecision = policy.handleActivation(
+        ObservedWindow(
+            id: sheetID,
+            bundleIdentifier: application.bundleIdentifier,
+            relationship: .transient(ancestorWindowIdentifiers: [selectedID])
+        )
+    )
+    let blockedDecision = policy.handleActivation(
+        ObservedWindow(
+            id: blockedID,
+            bundleIdentifier: application.bundleIdentifier,
+            relationship: .independent
+        )
+    )
+
+    #expect(transientDecision == .allow)
+    #expect(blockedDecision == .block(refocusTarget: .window(selectedID)))
+}
+
 private func windowID(_ value: String) -> WindowIdentifier {
     WindowIdentifier(rawValue: UUID(uuidString: value)!)
 }
