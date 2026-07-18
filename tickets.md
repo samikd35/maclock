@@ -43,21 +43,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 03 — Support multiple and closed application targets
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Expand application-only sessions from one running app to a practical allowlist of multiple running or installed applications, while making the breadth of application-level access explicit.
 
 **Blocked by:** 01 — Run a complete application-only focus session.
 
-- [ ] A user can select multiple running applications before starting.
-- [ ] A user can add a closed installed application to the allowlist.
-- [ ] Selecting an application allows all of its existing windows.
-- [ ] New windows from an allowed application remain allowed during the session.
-- [ ] Launching a closed application-level target during the session allows its windows.
-- [ ] An application-level selection visibly warns that all current and future content inside the application is permitted.
-- [ ] Targets that disappear before the start countdown finishes are revalidated and explained rather than silently ignored.
-- [ ] The final review accurately represents every broad target.
-- [ ] Policy tests cover multiple allowed applications, delayed application launch, target disappearance, and activation order.
+- [x] A user can select multiple running applications before starting.
+- [x] A user can add a closed installed application to the allowlist.
+- [x] Selecting an application allows all of its existing windows.
+- [x] New windows from an allowed application remain allowed during the session.
+- [x] Launching a closed application-level target during the session allows its windows.
+- [x] An application-level selection visibly warns that all current and future content inside the application is permitted.
+- [x] Targets that disappear before the start countdown finishes are revalidated and explained rather than silently ignored.
+- [x] The final review accurately represents every broad target.
+- [x] Policy tests cover multiple allowed applications, delayed application launch, target disappearance, and activation order.
 
 ## 04 — Enforce individual window targets precisely
 
