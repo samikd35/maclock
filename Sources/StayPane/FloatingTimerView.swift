@@ -14,7 +14,7 @@ struct FloatingTimerView: View {
                     .font(.headline.monospacedDigit())
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Focus session")
+                    Text("Session")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                     Text(model.formattedRemainingTime)
@@ -33,9 +33,15 @@ struct FloatingTimerView: View {
                 )
             }
             .buttonStyle(.plain)
-            .help(preferences.value.isCollapsed ? "Expand timer" : "Collapse timer")
+            .help(
+                preferences.value.isCollapsed
+                    ? "Expand Floating Timer"
+                    : "Collapse Floating Timer"
+            )
             .accessibilityLabel(
-                preferences.value.isCollapsed ? "Expand timer" : "Collapse timer"
+                preferences.value.isCollapsed
+                    ? "Expand Floating Timer"
+                    : "Collapse Floating Timer"
             )
 
             Button {
@@ -44,8 +50,8 @@ struct FloatingTimerView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .help("Hide floating timer")
-            .accessibilityLabel("Hide floating timer")
+            .help("Hide Floating Timer")
+            .accessibilityLabel("Hide Floating Timer")
         }
         .padding(.horizontal, preferences.value.isCollapsed ? 10 : 14)
         .padding(.vertical, preferences.value.isCollapsed ? 8 : 10)
@@ -55,6 +61,6 @@ struct FloatingTimerView: View {
                 .stroke(.separator.opacity(0.45), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("StayPane floating focus timer")
+        .accessibilityLabel("StayPane Floating Timer")
     }
 }

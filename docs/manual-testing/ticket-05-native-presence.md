@@ -11,7 +11,7 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 
 ## Floating Timer
 
-1. Start a Session with the Floating Timer preference visible. Confirm a native timer appears above ordinary application windows without any browser extension or webpage injection.
+1. Start a Session with the Floating Timer preference visible. Confirm the native Floating Timer appears above ordinary application windows without any browser extension or webpage injection.
 2. Drag it to another position and, when available, another display. It must remain movable and must not activate blocked content.
 3. Collapse it into the compact pill, then expand it. The remaining time and hide control must remain usable in both forms.
 4. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
