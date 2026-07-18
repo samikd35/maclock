@@ -43,3 +43,19 @@ _Avoid_: Restart session, reopen session
 **Interrupted**:
 A terminal Session outcome produced when StayPane must Fail Open because complete enforcement or safe Recovery is no longer trustworthy.
 _Avoid_: Failed, canceled, completed
+
+**Session History**:
+The bounded, local list of terminal Sessions containing only start time, planned duration, actual focus time, and Session Result.
+_Avoid_: Activity log, tracking log, target history
+
+**Session Result**:
+The terminal classification of one Session: Completed, Ended Early, or Interrupted.
+_Avoid_: Success flag, status code
+
+**Diagnostics**:
+A bounded, redacted local sequence of generic operational events used to troubleshoot StayPane without recording Target or browsing content.
+_Avoid_: Analytics, telemetry, activity log
+
+**Diagnostic Export**:
+A local troubleshooting artifact created only by an explicit user action and opened for inspection before the user decides whether to share it.
+_Avoid_: Crash upload, diagnostic submission, support report

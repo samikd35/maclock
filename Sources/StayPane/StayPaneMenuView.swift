@@ -6,6 +6,7 @@ struct StayPaneMenuView: View {
     @ObservedObject var model: StayPaneModel
     @ObservedObject var floatingTimerPreferences: FloatingTimerPreferenceModel
     @ObservedObject var launchAtLoginModel: LaunchAtLoginModel
+    @State private var isConfirmingHistoryClear = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +29,18 @@ struct StayPaneMenuView: View {
             footer
         }
         .frame(width: 390, height: 540)
+        .confirmationDialog(
+            "Clear all Session History?",
+            isPresented: $isConfirmingHistoryClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                model.clearHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes all retained local Session History records.")
+        }
     }
 
     private var header: some View {
@@ -168,6 +181,7 @@ struct StayPaneMenuView: View {
 
             floatingTimerSetupCard
             launchAtLoginCard
+            historyAndDiagnosticsCard
 
             Button("Review session") {
                 model.beginReview()
@@ -592,6 +606,88 @@ struct StayPaneMenuView: View {
         .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .onAppear {
             launchAtLoginModel.refresh()
+        }
+    }
+
+    private var historyAndDiagnosticsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Session History", systemImage: "clock.arrow.circlepath")
+                .font(.headline)
+
+            Text("Stored only on this Mac. Each record contains a start time, planned duration, actual focus time, and result—never app, window, tab, URL, or domain details.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if model.sessionHistory.isEmpty {
+                Text("No completed Sessions yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(
+                        Array(model.sessionHistory.reversed().enumerated()),
+                        id: \.offset
+                    ) { _, record in
+                        historyRow(record)
+                    }
+                }
+            }
+
+            HStack {
+                Button("Clear History…", role: .destructive) {
+                    isConfirmingHistoryClear = true
+                }
+                .disabled(model.sessionHistory.isEmpty)
+
+                Spacer()
+
+                Button("Export Diagnostics…") {
+                    model.exportDiagnostics()
+                }
+            }
+            .buttonStyle(.bordered)
+
+            Text("Diagnostics are bounded and redacted. StayPane has no analytics, telemetry, automatic crash upload, or background diagnostic submission. Export is explicit, local, and opened for inspection before you decide whether to share it.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func historyRow(_ record: SessionHistoryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(sessionResultLabel(record.result))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(
+                    record.startedAt,
+                    format: .dateTime.year().month().day().hour().minute()
+                )
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Text("Planned: \(StayPaneModel.formatPreset(seconds: record.plannedDuration.seconds))")
+                Text("Focused: \(StayPaneModel.formatPreset(seconds: max(0, Int(record.actualFocusTime.rounded()))))")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func sessionResultLabel(_ result: SessionResult) -> String {
+        switch result {
+        case .completed:
+            "Completed"
+        case .endedEarly:
+            "Ended Early"
+        case .interrupted:
+            "Interrupted"
         }
     }
 

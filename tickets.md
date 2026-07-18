@@ -120,21 +120,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 07 — Record private history and export redacted diagnostics
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Give users a truthful, minimal view of past sessions and an explicit troubleshooting path without collecting or uploading sensitive activity.
 
 **Blocked by:** 06 — Recover sessions across sleep, crashes, and restarts.
 
-- [ ] Completed history records start time, planned duration, actual focus time, and result only.
-- [ ] Results distinguish Completed, Ended Early, and Interrupted.
-- [ ] History never stores application names, window titles, tab titles, URLs, or domains.
-- [ ] Only the latest 100 session records are retained.
-- [ ] Clear History requires confirmation and removes all retained records.
-- [ ] Diagnostic logs are bounded and redact application content, window titles, tab titles, URLs, and domains.
-- [ ] StayPane performs no analytics, telemetry, automatic crash upload, or background diagnostic submission.
-- [ ] Export Diagnostics creates a local artifact only after an explicit action and lets the user inspect it before sharing.
-- [ ] Privacy tests scan history, recovery cleanup, logs, and exports for prohibited fields.
+- [x] Completed history records start time, planned duration, actual focus time, and result only.
+- [x] Results distinguish Completed, Ended Early, and Interrupted.
+- [x] History never stores application names, window titles, tab titles, URLs, or domains.
+- [x] Only the latest 100 session records are retained.
+- [x] Clear History requires confirmation and removes all retained records.
+- [x] Diagnostic logs are bounded and redact application content, window titles, tab titles, URLs, and domains.
+- [x] StayPane performs no analytics, telemetry, automatic crash upload, or background diagnostic submission.
+- [x] Export Diagnostics creates a local artifact only after an explicit action and lets the user inspect it before sharing.
+- [x] Privacy tests scan history, recovery cleanup, logs, and exports for prohibited fields.
 
 ## 08 — Connect one Chrome tab through the native bridge
 

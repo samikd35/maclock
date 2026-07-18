@@ -25,6 +25,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var remainingTime: TimeInterval = 0
     @Published private(set) var earlyResetRemainingTime: TimeInterval = 0
     @Published private(set) var notice: String?
+    @Published private(set) var sessionHistory: [SessionHistoryRecord] = []
     @Published private var transientSessionPresence: SessionPresence?
 
     private let defaults: UserDefaults
@@ -33,6 +34,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let windowCatalog: AccessibilityWindowCatalog
     private let outlineController: WindowOutlineController
     private let enforcement: ApplicationEnforcementController
+    private let historyStore: FileSessionHistoryStore
+    private let diagnosticLog: DiagnosticLog
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
@@ -40,6 +43,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private var timer: Timer?
     private var quitCoordinator = QuitCoordinator()
     private var addedApplicationIDs: Set<String> = []
+    private var hasCompletedInitialSynchronization = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -54,10 +58,14 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             windowCatalog: windowCatalog
         )
         let sessionRecoveryStore = FileSessionRecoveryStore()
+        let historyStore = FileSessionHistoryStore()
+        self.historyStore = historyStore
+        diagnosticLog = DiagnosticLog()
         engine = SessionEngine(
             clock: SystemSessionClock(),
             enforcement: enforcement,
-            recoveryStore: sessionRecoveryStore
+            recoveryStore: sessionRecoveryStore,
+            historyStore: historyStore
         )
 
         let storedDuration = defaults.integer(forKey: Self.lastDurationKey)
@@ -66,22 +74,30 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
         super.init()
 
+        recordDiagnostic(.applicationLaunched)
+
         enforcement.onBlockedApplication = { [weak self] message in
+            self?.recordDiagnostic(.blockedTarget)
             self?.showNotice(message)
         }
         enforcement.onEnforcementFailure = { [weak self] error in
             self?.failOpen(after: error)
         }
         enforcement.onRestorationFailure = { [weak self] count in
+            self?.recordDiagnostic(
+                .restorationPending,
+                details: "Pending Restoration count: \(count)."
+            )
             self?.showNotice(
                 "\(count) window(s) could not be restored yet. StayPane will keep retrying."
             )
         }
         enforcement.onRestorationRecovered = { [weak self] in
+            self?.recordDiagnostic(.restorationRecovered)
             self?.showNotice("No pending window restorations remain.")
         }
 
-        let startupNotice: String?
+        var startupNotice: String?
         do {
             switch try engine.recover() {
             case .none:
@@ -89,12 +105,15 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 engine.beginConfiguration(duration: initialDuration)
                 startupNotice = nil
             case .resumed:
+                recordDiagnostic(.recoveryResumed)
                 startupNotice = "StayPane resumed the unfinished Session from its Fixed End Time."
             case .completedWhileUnavailable:
+                recordDiagnostic(.recoveryCompletedOffline)
                 startupNotice = "The Session ended while StayPane was unavailable. Restoration cleanup is complete."
             }
         } catch {
             if case .interrupted = engine.state {
+                recordDiagnostic(.sessionInterrupted)
                 startupNotice = "The saved Session could not be resumed safely and was marked Interrupted."
             } else {
                 try? sessionRecoveryStore.clear()
@@ -102,6 +121,16 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 engine.beginConfiguration(duration: initialDuration)
                 startupNotice = "StayPane discarded unreadable Recovery data and performed Restoration for what remained controllable."
             }
+        }
+        do {
+            sessionHistory = try historyStore.load()
+        } catch {
+            startupNotice = [
+                startupNotice,
+                "StayPane could not load Session History."
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
         }
         durationSeconds = durationFromEngine()
         synchronizeWithEngine()
@@ -555,6 +584,38 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         refreshApplications()
     }
 
+    func clearHistory() {
+        do {
+            try historyStore.clear()
+            sessionHistory = []
+            showNotice("Session History was cleared.")
+        } catch {
+            showNotice("StayPane could not clear Session History.")
+        }
+    }
+
+    func exportDiagnostics() {
+        let panel = NSSavePanel()
+        panel.title = "Export Diagnostics"
+        panel.message = "Save a local diagnostics file. StayPane will open it so you can inspect it before choosing whether to share it."
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "StayPane-Diagnostics.json"
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+            return
+        }
+
+        do {
+            let exportedURL = try diagnosticLog.export(to: destinationURL)
+            NSWorkspace.shared.open(exportedURL)
+            showNotice("Diagnostics were exported locally and opened for inspection.")
+        } catch {
+            showNotice("StayPane could not export Diagnostics.")
+        }
+    }
+
     func tick() {
         if Date().timeIntervalSince(lastPermissionCheck) >= 1 {
             lastPermissionCheck = Date()
@@ -571,6 +632,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 failOpen(after: error)
                 return
             }
+            recordDiagnostic(.sessionStartFailed)
             isReviewing = false
             refreshApplications()
             showNotice(error.localizedDescription)
@@ -633,6 +695,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         let nextState = engine.state
         state = nextState
         updateTransientSessionPresence(from: previousState, to: nextState)
+        if hasCompletedInitialSynchronization {
+            updateTerminalPersistence(from: previousState, to: nextState)
+        }
+        hasCompletedInitialSynchronization = true
         remainingTime = engine.remainingTime() ?? 0
         earlyResetRemainingTime = engine.earlyResetRemainingTime() ?? 0
         switch state {
@@ -662,6 +728,54 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         synchronizeWithEngine()
         showNotice(
             "Session Interrupted. StayPane used Fail Open and performed Restoration for what remained controllable: \(error.localizedDescription)"
+        )
+    }
+
+    private func updateTerminalPersistence(
+        from previousState: SessionState,
+        to nextState: SessionState
+    ) {
+        switch nextState {
+        case .completed:
+            guard case .completed = previousState else {
+                refreshSessionHistory()
+                recordDiagnostic(.sessionCompleted)
+                return
+            }
+        case .endedEarly:
+            guard case .endedEarly = previousState else {
+                refreshSessionHistory()
+                recordDiagnostic(.sessionEndedEarly)
+                return
+            }
+        case .interrupted:
+            guard case .interrupted = previousState else {
+                refreshSessionHistory()
+                recordDiagnostic(.sessionInterrupted)
+                return
+            }
+        default:
+            break
+        }
+    }
+
+    private func refreshSessionHistory() {
+        do {
+            sessionHistory = try historyStore.load()
+        } catch {
+            showNotice("StayPane could not refresh Session History.")
+        }
+    }
+
+    private func recordDiagnostic(
+        _ event: DiagnosticEvent,
+        details: String? = nil,
+        privateValues: [String] = []
+    ) {
+        try? diagnosticLog.record(
+            event,
+            details: details,
+            privateValues: privateValues
         )
     }
 

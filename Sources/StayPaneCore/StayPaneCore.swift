@@ -453,15 +453,18 @@ public final class SessionEngine {
     private let clock: any SessionClock
     private let enforcement: any SessionEnforcing
     private let recoveryStore: any SessionRecoveryPersisting
+    private let historyStore: any SessionHistoryStoring
 
     public init(
         clock: any SessionClock,
         enforcement: any SessionEnforcing,
-        recoveryStore: any SessionRecoveryPersisting = NoSessionRecoveryStore()
+        recoveryStore: any SessionRecoveryPersisting = NoSessionRecoveryStore(),
+        historyStore: any SessionHistoryStoring = NoSessionHistoryStore()
     ) {
         self.clock = clock
         self.enforcement = enforcement
         self.recoveryStore = recoveryStore
+        self.historyStore = historyStore
     }
 
     public func beginConfiguration(duration: SessionDuration = .default) {
@@ -638,6 +641,7 @@ public final class SessionEngine {
                 )
             )
         )
+        recordHistory(for: activeSession, result: .endedEarly)
     }
 
     public func declineEarlyResetConfirmation() throws {
@@ -738,6 +742,7 @@ public final class SessionEngine {
                 reason: reason
             )
         )
+        recordHistory(for: activeSession, result: .interrupted)
         do {
             try protectInterruptedSession()
         } catch {
@@ -758,6 +763,12 @@ public final class SessionEngine {
             enforcement.stop()
             state = .completed(
                 CompletedSession(plan: snapshot.plan, completedAt: snapshot.endsAt)
+            )
+            recordHistory(
+                startedAt: snapshot.startedAt,
+                plannedDuration: snapshot.plan.duration,
+                actualFocusTime: snapshot.plan.duration.timeInterval,
+                result: .completed
             )
             return .completedWhileUnavailable
         }
@@ -785,6 +796,12 @@ public final class SessionEngine {
                     ),
                     reason: .recoveryUnavailable
                 )
+            )
+            recordHistory(
+                startedAt: snapshot.startedAt,
+                plannedDuration: snapshot.plan.duration,
+                actualFocusTime: elapsed,
+                result: .interrupted
             )
             try? protectInterruptedSession()
             enforcement.stop()
@@ -857,6 +874,39 @@ public final class SessionEngine {
         enforcement.stop()
         state = .completed(
             CompletedSession(plan: activeSession.plan, completedAt: clock.now)
+        )
+        recordHistory(for: activeSession, result: .completed)
+    }
+
+    private func recordHistory(
+        for activeSession: ActiveSession,
+        result: SessionResult
+    ) {
+        recordHistory(
+            startedAt: activeSession.startedAt,
+            plannedDuration: activeSession.plan.duration,
+            actualFocusTime: clock.continuousNow
+                - activeSession.continuousStartedAt,
+            result: result
+        )
+    }
+
+    private func recordHistory(
+        startedAt: Date,
+        plannedDuration: SessionDuration,
+        actualFocusTime: TimeInterval,
+        result: SessionResult
+    ) {
+        try? historyStore.record(
+            SessionHistoryRecord(
+                startedAt: startedAt,
+                plannedDuration: plannedDuration,
+                actualFocusTime: min(
+                    plannedDuration.timeInterval,
+                    max(0, actualFocusTime)
+                ),
+                result: result
+            )
         )
     }
 
