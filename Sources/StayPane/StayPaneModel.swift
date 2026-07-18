@@ -12,6 +12,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     @Published var selectedApplicationID: String?
     @Published var durationSeconds: Int
     @Published private(set) var durationValidationMessage: String?
+    @Published private(set) var accessibilityAuthorized = false
     @Published private(set) var accessibilityGranted = false
     @Published private(set) var shouldExplainAccessibility = true
     @Published var isReviewing = false
@@ -42,6 +43,9 @@ final class StayPaneModel: NSObject, ObservableObject {
 
         enforcement.onBlockedApplication = { [weak self] message in
             self?.showNotice(message)
+        }
+        enforcement.onEnforcementFailure = { [weak self] error in
+            self?.failOpen(after: error)
         }
 
         engine.beginConfiguration(duration: initialDuration)
@@ -85,9 +89,9 @@ final class StayPaneModel: NSObject, ObservableObject {
     }
 
     var menuBarTitle: String {
-        if case let .enforcing(activeSession) = state {
-            if notice != nil {
-                return "Blocked · \(activeSession.plan.target.displayName) only"
+        if case .enforcing = state {
+            if let notice {
+                return "\(notice) · \(formattedRemainingTime)"
             }
             return formattedRemainingTime
         }
@@ -128,10 +132,16 @@ final class StayPaneModel: NSObject, ObservableObject {
             return
         }
 
-        durationValidationMessage = nil
-        defaults.set(duration.seconds, forKey: Self.lastDurationKey)
-        try? engine.setDuration(duration)
-        synchronizeWithEngine()
+        do {
+            try engine.setDuration(duration)
+            durationValidationMessage = nil
+            defaults.set(duration.seconds, forKey: Self.lastDurationKey)
+            synchronizeWithEngine()
+        } catch {
+            durationSeconds = durationFromEngine()
+            durationValidationMessage = nil
+            showNotice("The duration is locked for the current session.")
+        }
     }
 
     func resetDurationToDefault() {
@@ -147,8 +157,16 @@ final class StayPaneModel: NSObject, ObservableObject {
         refreshAccessibilityStatus()
     }
 
-    func refreshAccessibilityStatus() {
-        accessibilityGranted = permissionClient.isGranted
+    func refreshAccessibilityStatus(forceVerification: Bool = true) {
+        accessibilityAuthorized = permissionClient.isGranted
+        guard accessibilityAuthorized else {
+            accessibilityGranted = false
+            return
+        }
+
+        if forceVerification || !accessibilityGranted {
+            accessibilityGranted = permissionClient.verifyWindowControl()
+        }
         if accessibilityGranted {
             shouldExplainAccessibility = false
         }
@@ -210,7 +228,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     func tick() {
         if Date().timeIntervalSince(lastPermissionCheck) >= 1 {
             lastPermissionCheck = Date()
-            refreshAccessibilityStatus()
+            refreshAccessibilityStatus(forceVerification: false)
         }
 
         do {
@@ -263,6 +281,30 @@ final class StayPaneModel: NSObject, ObservableObject {
     private func synchronizeWithEngine() {
         state = engine.state
         remainingTime = engine.remainingTime() ?? 0
+    }
+
+    private func failOpen(after error: Error) {
+        engine.reset()
+        selectedApplicationID = nil
+        isReviewing = false
+        engine.beginConfiguration(duration: currentValidDuration())
+        synchronizeWithEngine()
+        showNotice("Enforcement stopped safely: \(error.localizedDescription)")
+    }
+
+    private func durationFromEngine() -> Int {
+        switch engine.state {
+        case let .configuring(draft), let .ready(draft):
+            draft.duration.seconds
+        case let .starting(plan, _):
+            plan.duration.seconds
+        case let .enforcing(activeSession):
+            activeSession.plan.duration.seconds
+        case let .completed(completedSession):
+            completedSession.plan.duration.seconds
+        case .idle:
+            currentValidDuration().seconds
+        }
     }
 
     @objc

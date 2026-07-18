@@ -4,11 +4,17 @@ import StayPaneCore
 
 enum ApplicationEnforcementError: LocalizedError {
     case accessibilityPermissionMissing
+    case windowControlUnavailable(String)
+    case allowedApplicationUnavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .accessibilityPermissionMissing:
             "Accessibility access is required before StayPane can start a session."
+        case let .windowControlUnavailable(applicationName):
+            "StayPane could not safely control \(applicationName)."
+        case let .allowedApplicationUnavailable(applicationName):
+            "\(applicationName) is no longer available."
         }
     }
 }
@@ -16,6 +22,7 @@ enum ApplicationEnforcementError: LocalizedError {
 @MainActor
 final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     var onBlockedApplication: ((String) -> Void)?
+    var onEnforcementFailure: ((Error) -> Void)?
 
     private let permissionClient: AccessibilityPermissionClient
     private let notificationCenter: NotificationCenter
@@ -34,15 +41,25 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     }
 
     func start(allowing target: ApplicationTarget) throws {
-        guard permissionClient.isGranted else {
+        guard permissionClient.isGranted, permissionClient.verifyWindowControl() else {
             throw ApplicationEnforcementError.accessibilityPermissionMissing
         }
 
         allowedTarget = target
         changedWindows.removeAll()
         beginObservingActivations()
-        minimizeCurrentlyDisallowedApplications()
-        activateAllowedApplication()
+
+        do {
+            try minimizeCurrentlyDisallowedApplications()
+            guard activateAllowedApplication() else {
+                throw ApplicationEnforcementError.allowedApplicationUnavailable(
+                    target.displayName
+                )
+            }
+        } catch {
+            stop()
+            throw error
+        }
     }
 
     func stop() {
@@ -76,9 +93,19 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             return
         }
 
-        minimizeWindows(of: application)
-        publishBlockedNotice(for: application.localizedName ?? "That app")
-        activateAllowedApplication()
+        do {
+            try minimizeWindows(of: application)
+            guard activateAllowedApplication() else {
+                throw ApplicationEnforcementError.allowedApplicationUnavailable(
+                    allowedTarget.displayName
+                )
+            }
+            publishBlockedNotice(for: application.localizedName ?? "That app")
+        } catch {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            stop()
+            onEnforcementFailure?(error)
+        }
     }
 
     private func beginObservingActivations() {
@@ -108,7 +135,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         isObserving = false
     }
 
-    private func minimizeCurrentlyDisallowedApplications() {
+    private func minimizeCurrentlyDisallowedApplications() throws {
         guard let allowedTarget else {
             return
         }
@@ -117,12 +144,14 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             application.activationPolicy == .regular
                 && application.processIdentifier != ProcessInfo.processInfo.processIdentifier
                 && application.bundleIdentifier != allowedTarget.bundleIdentifier
+                && !application.isHidden
         {
-            minimizeWindows(of: application)
+            try minimizeWindows(of: application)
         }
     }
 
-    private func minimizeWindows(of application: NSRunningApplication) {
+    private func minimizeWindows(of application: NSRunningApplication) throws {
+        let applicationName = application.localizedName ?? "a running application"
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -132,17 +161,28 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         )
 
         guard result == .success, let windows = value as? [AXUIElement] else {
-            return
+            throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
         }
 
-        for window in windows where isWindowMinimized(window) == false {
+        for window in windows {
+            guard let isMinimized = isWindowMinimized(window) else {
+                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
+            }
+            guard !isMinimized else {
+                continue
+            }
+
             let minimizeResult = AXUIElementSetAttributeValue(
                 window,
                 kAXMinimizedAttribute as CFString,
                 kCFBooleanTrue
             )
 
-            if minimizeResult == .success && !changedWindows.contains(where: { CFEqual($0, window) }) {
+            guard minimizeResult == .success else {
+                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
+            }
+
+            if !changedWindows.contains(where: { CFEqual($0, window) }) {
                 changedWindows.append(window)
             }
         }
@@ -162,9 +202,9 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         return value as? Bool
     }
 
-    private func activateAllowedApplication() {
+    private func activateAllowedApplication() -> Bool {
         guard let allowedTarget else {
-            return
+            return false
         }
 
         let application = NSRunningApplication(
@@ -173,7 +213,10 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             withBundleIdentifier: allowedTarget.bundleIdentifier
         ).first
 
-        application?.activate(options: [.activateAllWindows])
+        guard let application, !application.isTerminated else {
+            return false
+        }
+        return application.activate(options: [.activateAllWindows])
     }
 
     private func publishBlockedNotice(for applicationName: String) {

@@ -6,22 +6,22 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 01 — Run a complete application-only focus session
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Deliver the first complete StayPane experience on a supported Mac. A user launches the menu-bar app, grants and verifies Accessibility permission, selects one running application, chooses a valid duration, reviews the session, starts after a cancelable countdown, remains confined to the selected application, and regains their prior windows when the timer completes.
 
 **Blocked by:** None — can start immediately.
 
-- [ ] A source build launches as a native menu-bar application on Apple silicon with macOS 26 or newer.
-- [ ] First use explains Accessibility permission, opens the relevant System Settings area, and verifies that control works before enabling Start.
-- [ ] The duration defaults to 30 minutes, accepts 10 seconds through 24 hours, remembers the last value, and can reset to 30 minutes.
-- [ ] The picker lists running applications with recognizable names and icons and requires one selection.
-- [ ] A final review shows the selected application and duration, followed by a cancelable three-second countdown.
-- [ ] Starting creates an immutable active session through the Session Engine and minimizes disallowed application windows without quitting their processes.
-- [ ] Activating a blocked application returns focus to the last allowed target and produces rate-limited explanatory feedback.
-- [ ] Timer completion stops enforcement and restores only windows changed by StayPane.
-- [ ] A denied or missing Accessibility permission prevents the session from starting without trapping the user.
-- [ ] Session Engine tests prove the idle, configuring, ready, starting, enforcing, and completed path using simulated time and fake enforcement ports.
+- [x] A source build launches as a native menu-bar application on Apple silicon with macOS 26 or newer.
+- [x] First use explains Accessibility permission, opens the relevant System Settings area, and verifies that control works before enabling Start.
+- [x] The duration defaults to 30 minutes, accepts 10 seconds through 24 hours, remembers the last value, and can reset to 30 minutes.
+- [x] The picker lists running applications with recognizable names and icons and requires one selection.
+- [x] A final review shows the selected application and duration, followed by a cancelable three-second countdown.
+- [x] Starting creates an immutable active session through the Session Engine and minimizes disallowed application windows without quitting their processes.
+- [x] Activating a blocked application returns focus to the last allowed target and produces rate-limited explanatory feedback.
+- [x] Timer completion stops enforcement and restores only windows changed by StayPane.
+- [x] A denied or missing Accessibility permission prevents the session from starting without trapping the user.
+- [x] Session Engine tests prove the idle, configuring, ready, starting, enforcing, and completed path using simulated time and fake enforcement ports.
 
 ## 02 — Make application sessions safe to end early
 

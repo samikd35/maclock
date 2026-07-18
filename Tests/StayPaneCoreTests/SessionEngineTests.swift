@@ -38,7 +38,15 @@ import Testing
     #expect(plan.target == target)
     #expect(startsAt == clock.now.addingTimeInterval(3))
 
-    clock.advance(by: 3)
+    clock.advance(by: 2)
+    try engine.advance()
+    guard case .starting = engine.state else {
+        Issue.record("Expected countdown to remain active before its boundary")
+        return
+    }
+    #expect(enforcement.startedTargets.isEmpty)
+
+    clock.advance(by: 1)
     try engine.advance()
     guard case let .enforcing(activeSession) = engine.state else {
         Issue.record("Expected enforcing")
@@ -47,7 +55,15 @@ import Testing
     #expect(enforcement.startedTargets == [target])
     #expect(activeSession.endsAt == clock.now.addingTimeInterval(30 * 60))
 
-    clock.advance(by: 30 * 60)
+    clock.advance(by: 30 * 60 - 1)
+    try engine.advance()
+    guard case .enforcing = engine.state else {
+        Issue.record("Expected enforcement before the completion boundary")
+        return
+    }
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 1)
     try engine.advance()
     guard case let .completed(completedSession) = engine.state else {
         Issue.record("Expected completed")

@@ -174,6 +174,11 @@ struct StayPaneMenuView: View {
             Text("After granting access in System Settings, return here. StayPane verifies it automatically before enabling Start.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if model.accessibilityAuthorized && !model.accessibilityGranted {
+                Text("Permission is enabled, but the harmless window-control check did not succeed. Open a normal app window, then choose Check Again.")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+            }
             HStack {
                 Button("Request Access & Open Settings") {
                     model.requestAccessibilityAccess()
@@ -193,7 +198,7 @@ struct StayPaneMenuView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Review your session")
                 .font(.title2.weight(.semibold))
-            Text("Once the countdown finishes, the allowed app and duration cannot be changed unless you use the honest reset.")
+            Text("Once the countdown finishes, the allowed app and duration stay locked until the session ends.")
                 .foregroundStyle(.secondary)
 
             reviewRow(
