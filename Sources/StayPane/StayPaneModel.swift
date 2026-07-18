@@ -155,25 +155,25 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     var isActiveSession: Bool {
+        sessionPresence.isEnforcing
+    }
+
+    var sessionPresence: SessionPresence {
         switch state {
-        case .enforcing, .resetPending:
-            true
+        case .enforcing:
+            .active(remainingSeconds: roundedUpSeconds(remainingTime))
+        case .resetPending:
+            .resetPending(
+                focusRemainingSeconds: roundedUpSeconds(remainingTime),
+                resetRemainingSeconds: roundedUpSeconds(earlyResetRemainingTime)
+            )
         default:
-            false
+            .inactive
         }
     }
 
     var menuBarTitle: String {
-        if case .enforcing = state {
-            if let notice {
-                return "\(notice) · \(formattedRemainingTime)"
-            }
-            return formattedRemainingTime
-        }
-        if case .resetPending = state {
-            return "Reset \(formattedEarlyResetRemainingTime) · \(formattedRemainingTime)"
-        }
-        return "StayPane"
+        sessionPresence.menuBarTitle
     }
 
     func refreshApplications() {
@@ -367,6 +367,22 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         permissionClient.requestAccess()
         permissionClient.openSystemSettings()
         refreshAccessibilityStatus()
+    }
+
+    func openFocusSettings() {
+        let candidateURLs = [
+            "x-apple.systempreferences:com.apple.Focus-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.notifications"
+        ]
+        for candidate in candidateURLs {
+            guard let url = URL(string: candidate) else {
+                continue
+            }
+            if NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+        showNotice("Open System Settings → Focus to silence notifications during a session.")
     }
 
     func refreshAccessibilityStatus(forceVerification: Bool = true) {
@@ -712,6 +728,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func currentValidDuration() -> SessionDuration {
         SessionDuration(seconds: durationSeconds) ?? .default
+    }
+
+    private func roundedUpSeconds(_ timeInterval: TimeInterval) -> Int {
+        max(0, Int(timeInterval.rounded(.up)))
     }
 
     private static func format(seconds: Int) -> String {

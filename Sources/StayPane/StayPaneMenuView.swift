@@ -4,6 +4,7 @@ import SwiftUI
 
 struct StayPaneMenuView: View {
     @ObservedObject var model: StayPaneModel
+    @ObservedObject var floatingTimerPreferences: FloatingTimerPreferenceModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,6 +163,8 @@ struct StayPaneMenuView: View {
                 }
             }
 
+            floatingTimerSetupCard
+
             Button("Review session") {
                 model.beginReview()
             }
@@ -240,6 +243,25 @@ struct StayPaneMenuView: View {
                 value: model.accessibilityGranted ? "Verified" : "Missing",
                 systemImage: model.accessibilityGranted ? "checkmark.seal" : "exclamationmark.triangle"
             )
+            reviewRow(
+                title: "Floating Timer",
+                value: floatingTimerPreferenceSummary,
+                systemImage: "timer"
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Optional macOS Focus reminder", systemImage: "moon.fill")
+                    .font(.headline)
+                Text("StayPane cannot reliably toggle macOS Focus and does not automate Control Center. Enable Focus yourself if you also want notifications silenced.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Open Focus Settings") {
+                    model.openFocusSettings()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(10)
+            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
 
             HStack {
                 Button("Back") {
@@ -275,7 +297,7 @@ struct StayPaneMenuView: View {
 
     private func enforcingView(activeSession: ActiveSession) -> some View {
         VStack(spacing: 18) {
-            Label("Focus session active", systemImage: "lock.fill")
+            Label("Enforcement active", systemImage: "lock.fill")
                 .font(.headline)
                 .foregroundStyle(.green)
 
@@ -300,6 +322,8 @@ struct StayPaneMenuView: View {
 
             Text("Session settings remain locked until the timer completes.")
                 .font(.caption.weight(.medium))
+
+            floatingTimerControls
 
             Button("End Session Early…", role: .destructive) {
                 model.requestEarlyReset()
@@ -355,6 +379,8 @@ struct StayPaneMenuView: View {
 
             Text("Focus time remaining: \(model.formattedRemainingTime)")
                 .font(.caption.monospacedDigit().weight(.medium))
+
+            floatingTimerControls
 
             honestBoundaryNote
         }
@@ -412,6 +438,76 @@ struct StayPaneMenuView: View {
             .font(.caption2)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
+    }
+
+    private var floatingTimerControls: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Button(
+                    floatingTimerPreferences.value.isVisible
+                        ? "Hide Floating Timer"
+                        : "Show Floating Timer"
+                ) {
+                    floatingTimerPreferences.setVisible(
+                        !floatingTimerPreferences.value.isVisible
+                    )
+                }
+                .buttonStyle(.bordered)
+
+                if floatingTimerPreferences.value.isVisible {
+                    Button(
+                        floatingTimerPreferences.value.isCollapsed
+                            ? "Expand"
+                            : "Collapse"
+                    ) {
+                        floatingTimerPreferences.toggleCollapsed()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            Text("The floating timer is native, movable, and optional. The menu-bar timer remains visible when it is hidden.")
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var floatingTimerSetupCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Floating Timer", systemImage: "timer")
+                .font(.headline)
+            Toggle(
+                "Show during the Session",
+                isOn: Binding(
+                    get: { floatingTimerPreferences.value.isVisible },
+                    set: { floatingTimerPreferences.setVisible($0) }
+                )
+            )
+            .toggleStyle(.switch)
+            Toggle(
+                "Start collapsed",
+                isOn: Binding(
+                    get: { floatingTimerPreferences.value.isCollapsed },
+                    set: { floatingTimerPreferences.setCollapsed($0) }
+                )
+            )
+            .toggleStyle(.switch)
+            .disabled(!floatingTimerPreferences.value.isVisible)
+            Text("A native movable countdown above your work. It is never injected into webpages.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var floatingTimerPreferenceSummary: String {
+        guard floatingTimerPreferences.value.isVisible else {
+            return "Hidden; menu-bar countdown remains"
+        }
+        return floatingTimerPreferences.value.isCollapsed
+            ? "Visible, collapsed"
+            : "Visible, expanded"
     }
 
     private var broadApplicationWarning: some View {
@@ -614,22 +710,28 @@ struct StayPaneMenuView: View {
     }
 
     private var footer: some View {
-        HStack {
-            Text("Local, source-only, and open source")
+        VStack(spacing: 5) {
+            HStack {
+                Text("⌃⌥⌘S opens StayPane")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(model.isActiveSession ? "Quit…" : "Quit") {
+                    if model.handleQuitRequest() {
+                        NSApplication.shared.terminate(nil)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help(
+                    model.isActiveSession
+                        ? "Quit uses the same 30-second early-reset flow"
+                        : "Quit StayPane"
+                )
+            }
+            Text("Menu-bar and in-app status work without notification permission.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Spacer()
-            Button(model.isActiveSession ? "Quit…" : "Quit") {
-                if model.handleQuitRequest() {
-                    NSApplication.shared.terminate(nil)
-                }
-            }
-            .buttonStyle(.plain)
-            .help(
-                model.isActiveSession
-                    ? "Quit uses the same 30-second early-reset flow"
-                    : "Quit StayPane"
-            )
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

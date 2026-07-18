@@ -23,3 +23,15 @@ _Avoid_: Closed app, forbidden process
 **Restoration**:
 Returning only windows minimized by StayPane to their prior non-minimized state when enforcement stops.
 _Avoid_: Reopen, workspace reset
+
+**Status Panel**:
+The native StayPane interface that presents setup while idle and immutable Session status while enforcement is active.
+_Avoid_: Popup, dashboard, setup window
+
+**Floating Timer**:
+An optional movable native countdown that stays above work and can collapse or hide without affecting the menu-bar countdown.
+_Avoid_: Overlay, webpage timer, widget
+
+**Open-Panel Shortcut**:
+The sole global shortcut, whose only effect is to reveal the Status Panel.
+_Avoid_: Action shortcut, reset shortcut

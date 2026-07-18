@@ -5,6 +5,20 @@ import SwiftUI
 final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
     weak var model: (any StayPaneTerminationHandling)?
     private var isSystemPowerOffPending = false
+    private weak var interfaceModel: StayPaneModel?
+    private weak var floatingTimerPreferences: FloatingTimerPreferenceModel?
+    private var floatingTimerController: FloatingTimerController?
+    private var panelController: StayPanePanelController?
+    private var globalShortcutController: GlobalShortcutController?
+
+    func configure(
+        model: StayPaneModel,
+        floatingTimerPreferences: FloatingTimerPreferenceModel
+    ) {
+        self.model = model
+        interfaceModel = model
+        self.floatingTimerPreferences = floatingTimerPreferences
+    }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -28,6 +42,31 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
         return model.handleQuitRequest() ? .terminateNow : .terminateCancel
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let interfaceModel, let floatingTimerPreferences else {
+            return
+        }
+
+        let panelController = StayPanePanelController(
+            model: interfaceModel,
+            floatingTimerPreferences: floatingTimerPreferences
+        )
+        self.panelController = panelController
+        floatingTimerController = FloatingTimerController(
+            model: interfaceModel,
+            preferences: floatingTimerPreferences
+        )
+        globalShortcutController = GlobalShortcutController {
+            panelController.showPanel()
+        }
+        if globalShortcutController == nil {
+            interfaceModel.showNotice(
+                "The ⌃⌥⌘S shortcut is already in use, but the menu-bar panel remains available."
+            )
+            panelController.showPanel()
+        }
+    }
+
     @objc
     func workspaceWillPowerOff(_ notification: Notification) {
         isSystemPowerOffPending = true
@@ -39,16 +78,27 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
 struct StayPaneApp: App {
     @NSApplicationDelegateAdaptor(StayPaneAppDelegate.self) private var appDelegate
     @StateObject private var model: StayPaneModel
+    @StateObject private var floatingTimerPreferences: FloatingTimerPreferenceModel
 
     init() {
         let model = StayPaneModel()
+        let floatingTimerPreferences = FloatingTimerPreferenceModel()
         _model = StateObject(wrappedValue: model)
-        appDelegate.model = model
+        _floatingTimerPreferences = StateObject(
+            wrappedValue: floatingTimerPreferences
+        )
+        appDelegate.configure(
+            model: model,
+            floatingTimerPreferences: floatingTimerPreferences
+        )
     }
 
     var body: some Scene {
         MenuBarExtra {
-            StayPaneMenuView(model: model)
+            StayPaneMenuView(
+                model: model,
+                floatingTimerPreferences: floatingTimerPreferences
+            )
         } label: {
             Label(model.menuBarTitle, systemImage: "rectangle.inset.filled.and.person.filled")
         }
