@@ -1,0 +1,27 @@
+# StayPane
+
+StayPane is a source-only macOS menu-bar focus timer. You choose one running application and a duration; during the session, StayPane minimizes other app windows and returns focus to the allowed app without quitting anything.
+
+Ticket 01 targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Screen Recording permission is not required.
+
+## Build and run
+
+Install Apple's Command Line Tools, then run:
+
+```sh
+make run
+```
+
+This compiles a release executable, creates an ad-hoc-signed app at `.build/StayPane.app`, and opens it. No paid Apple Developer account is needed for a local source build.
+
+On first use, choose **Request Access & Open Settings**, enable StayPane under **Privacy & Security → Accessibility**, and return to the menu-bar app. StayPane verifies permission before allowing a session to start.
+
+Run the tests with:
+
+```sh
+make test
+```
+
+## Current scope
+
+The first vertical slice supports one allowed running application and all of that application's windows. Browser tab restrictions and multi-app/window targeting belong to later tickets in [`tickets.md`](tickets.md).
