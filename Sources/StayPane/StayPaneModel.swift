@@ -4,7 +4,7 @@ import Foundation
 import StayPaneCore
 
 @MainActor
-final class StayPaneModel: NSObject, ObservableObject {
+final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandling {
     static let lastDurationKey = "lastSessionDurationSeconds"
     static let accessibilityIntroKey = "hasSeenAccessibilityIntro"
 
@@ -29,7 +29,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
     private var timer: Timer?
-    private var quitAfterEarlyReset = false
+    private var quitCoordinator = QuitCoordinator()
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -252,15 +252,13 @@ final class StayPaneModel: NSObject, ObservableObject {
         }
     }
 
-    func requestEarlyReset(quitWhenFinished: Bool = false) {
+    func requestEarlyReset() {
         if case .resetPending = state {
-            quitAfterEarlyReset = quitAfterEarlyReset || quitWhenFinished
             return
         }
 
         do {
             try engine.requestEarlyReset()
-            quitAfterEarlyReset = quitWhenFinished
             synchronizeWithEngine()
         } catch {
             showNotice(error.localizedDescription)
@@ -270,7 +268,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     func cancelEarlyReset() {
         do {
             try engine.cancelEarlyReset()
-            quitAfterEarlyReset = false
+            quitCoordinator.cancelDeferredQuit()
             synchronizeWithEngine()
         } catch {
             showNotice(error.localizedDescription)
@@ -280,7 +278,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     func declineEarlyResetConfirmation() {
         do {
             try engine.declineEarlyResetConfirmation()
-            quitAfterEarlyReset = false
+            quitCoordinator.cancelDeferredQuit()
             synchronizeWithEngine()
         } catch {
             showNotice(error.localizedDescription)
@@ -298,25 +296,32 @@ final class StayPaneModel: NSObject, ObservableObject {
     }
 
     func handleQuitRequest() -> Bool {
-        guard enforcement.pendingRestorationCount == 0 else {
-            showNotice("StayPane is still restoring windows and will quit when restoration finishes.")
-            return false
-        }
-        guard isActiveSession else {
+        let decision = quitCoordinator.requestQuit(
+            isSessionActive: isActiveSession,
+            pendingRestorationCount: enforcement.pendingRestorationCount
+        )
+
+        switch decision {
+        case .terminateNow:
             prepareToQuit()
             return true
-        }
 
-        requestEarlyReset(quitWhenFinished: true)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        return false
+        case .waitForRestoration:
+            showNotice("StayPane is still restoring windows and will quit when restoration finishes.")
+            return false
+
+        case .beginEarlyReset:
+            requestEarlyReset()
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return false
+        }
     }
 
     func startAnotherSession() {
         engine.beginConfiguration(duration: currentValidDuration())
         selectedApplicationID = nil
         isReviewing = false
-        quitAfterEarlyReset = false
+        quitCoordinator.cancelDeferredQuit()
         synchronizeWithEngine()
         refreshApplications()
     }
@@ -339,7 +344,15 @@ final class StayPaneModel: NSObject, ObservableObject {
     }
 
     func prepareToQuit() {
-        quitAfterEarlyReset = false
+        stopForTermination()
+    }
+
+    func prepareForSystemTermination() {
+        stopForTermination()
+    }
+
+    private func stopForTermination() {
+        quitCoordinator.cancelDeferredQuit()
         engine.reset()
         timer?.invalidate()
     }
@@ -387,25 +400,22 @@ final class StayPaneModel: NSObject, ObservableObject {
         engine.reset()
         selectedApplicationID = nil
         isReviewing = false
-        quitAfterEarlyReset = false
+        quitCoordinator.cancelDeferredQuit()
         engine.beginConfiguration(duration: currentValidDuration())
         synchronizeWithEngine()
         showNotice("Enforcement stopped safely: \(error.localizedDescription)")
     }
 
     private func terminateIfQuitRequestFinished() {
-        guard quitAfterEarlyReset, enforcement.pendingRestorationCount == 0 else {
+        guard quitCoordinator.consumeQuitWhenSafe(
+            isSessionActive: isActiveSession,
+            pendingRestorationCount: enforcement.pendingRestorationCount
+        ) else {
             return
         }
 
-        switch state {
-        case .completed, .endedEarly:
-            quitAfterEarlyReset = false
-            timer?.invalidate()
-            NSApplication.shared.terminate(nil)
-        default:
-            break
-        }
+        timer?.invalidate()
+        NSApplication.shared.terminate(nil)
     }
 
     private func durationFromEngine() -> Int {

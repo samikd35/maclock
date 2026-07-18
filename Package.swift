@@ -22,6 +22,10 @@ let package = Package(
         .testTarget(
             name: "StayPanePlatformTests",
             dependencies: ["StayPanePlatform"]
+        ),
+        .testTarget(
+            name: "StayPaneAppTests",
+            dependencies: ["StayPane"]
         )
     ],
     swiftLanguageModes: [.v6]

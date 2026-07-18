@@ -3,7 +3,17 @@ import SwiftUI
 
 @MainActor
 final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: StayPaneModel?
+    weak var model: (any StayPaneTerminationHandling)?
+    private var isSystemPowerOffPending = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceWillPowerOff(_:)),
+            name: NSWorkspace.willPowerOffNotification,
+            object: nil
+        )
+    }
 
     func applicationShouldTerminate(
         _ sender: NSApplication
@@ -11,7 +21,16 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
         guard let model else {
             return .terminateNow
         }
+        if isSystemPowerOffPending {
+            model.prepareForSystemTermination()
+            return .terminateNow
+        }
         return model.handleQuitRequest() ? .terminateNow : .terminateCancel
+    }
+
+    @objc
+    func workspaceWillPowerOff(_ notification: Notification) {
+        isSystemPowerOffPending = true
     }
 }
 

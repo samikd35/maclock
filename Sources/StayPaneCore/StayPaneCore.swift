@@ -69,11 +69,21 @@ public struct ActiveSession: Equatable, Sendable {
     public let plan: SessionPlan
     public let startedAt: Date
     public let endsAt: Date
+    public let continuousStartedAt: TimeInterval
+    public let continuousEndsAt: TimeInterval
 
-    public init(plan: SessionPlan, startedAt: Date, endsAt: Date) {
+    public init(
+        plan: SessionPlan,
+        startedAt: Date,
+        endsAt: Date,
+        continuousStartedAt: TimeInterval,
+        continuousEndsAt: TimeInterval
+    ) {
         self.plan = plan
         self.startedAt = startedAt
         self.endsAt = endsAt
+        self.continuousStartedAt = continuousStartedAt
+        self.continuousEndsAt = continuousEndsAt
     }
 }
 
@@ -91,15 +101,18 @@ public struct ResetPendingSession: Equatable, Sendable {
     public let activeSession: ActiveSession
     public let requestedAt: Date
     public let confirmationAvailableAt: Date
+    public let continuousConfirmationAvailableAt: TimeInterval
 
     public init(
         activeSession: ActiveSession,
         requestedAt: Date,
-        confirmationAvailableAt: Date
+        confirmationAvailableAt: Date,
+        continuousConfirmationAvailableAt: TimeInterval
     ) {
         self.activeSession = activeSession
         self.requestedAt = requestedAt
         self.confirmationAvailableAt = confirmationAvailableAt
+        self.continuousConfirmationAvailableAt = continuousConfirmationAvailableAt
     }
 }
 
@@ -139,9 +152,55 @@ public enum SessionEngineError: Error, Equatable {
     case earlyResetConfirmationNotReady
 }
 
+public enum QuitDecision: Equatable, Sendable {
+    case terminateNow
+    case beginEarlyReset
+    case waitForRestoration
+}
+
+public struct QuitCoordinator: Equatable, Sendable {
+    private var isQuitPending = false
+
+    public init() {}
+
+    public mutating func requestQuit(
+        isSessionActive: Bool,
+        pendingRestorationCount: Int
+    ) -> QuitDecision {
+        if isSessionActive {
+            isQuitPending = true
+            return .beginEarlyReset
+        }
+        if pendingRestorationCount > 0 {
+            isQuitPending = true
+            return .waitForRestoration
+        }
+
+        isQuitPending = false
+        return .terminateNow
+    }
+
+    public mutating func consumeQuitWhenSafe(
+        isSessionActive: Bool,
+        pendingRestorationCount: Int
+    ) -> Bool {
+        guard isQuitPending, !isSessionActive, pendingRestorationCount == 0 else {
+            return false
+        }
+
+        isQuitPending = false
+        return true
+    }
+
+    public mutating func cancelDeferredQuit() {
+        isQuitPending = false
+    }
+}
+
 @MainActor
 public protocol SessionClock: AnyObject {
     var now: Date { get }
+    var continuousNow: TimeInterval { get }
 }
 
 @MainActor
@@ -220,12 +279,17 @@ public final class SessionEngine {
         guard case let .enforcing(activeSession) = state else {
             throw SessionEngineError.invalidTransition
         }
+        if hasCompleted(activeSession) {
+            completeNormally(activeSession)
+            return
+        }
 
         state = .resetPending(
             ResetPendingSession(
                 activeSession: activeSession,
                 requestedAt: clock.now,
-                confirmationAvailableAt: clock.now.addingTimeInterval(countdown)
+                confirmationAvailableAt: clock.now.addingTimeInterval(countdown),
+                continuousConfirmationAvailableAt: clock.continuousNow + countdown
             )
         )
     }
@@ -234,14 +298,8 @@ public final class SessionEngine {
         guard case let .resetPending(pendingReset) = state else {
             throw SessionEngineError.invalidTransition
         }
-        if clock.now >= pendingReset.activeSession.endsAt {
-            enforcement.stop()
-            state = .completed(
-                CompletedSession(
-                    plan: pendingReset.activeSession.plan,
-                    completedAt: clock.now
-                )
-            )
+        if hasCompleted(pendingReset.activeSession) {
+            completeNormally(pendingReset.activeSession)
             return
         }
 
@@ -252,17 +310,11 @@ public final class SessionEngine {
         guard case let .resetPending(pendingReset) = state else {
             throw SessionEngineError.invalidTransition
         }
-        if clock.now >= pendingReset.activeSession.endsAt {
-            enforcement.stop()
-            state = .completed(
-                CompletedSession(
-                    plan: pendingReset.activeSession.plan,
-                    completedAt: clock.now
-                )
-            )
+        if hasCompleted(pendingReset.activeSession) {
+            completeNormally(pendingReset.activeSession)
             return
         }
-        guard clock.now >= pendingReset.confirmationAvailableAt else {
+        guard clock.continuousNow >= pendingReset.continuousConfirmationAvailableAt else {
             throw SessionEngineError.earlyResetConfirmationNotReady
         }
 
@@ -273,7 +325,10 @@ public final class SessionEngine {
                 plan: activeSession.plan,
                 startedAt: activeSession.startedAt,
                 endedAt: clock.now,
-                actualFocusDuration: clock.now.timeIntervalSince(activeSession.startedAt)
+                actualFocusDuration: max(
+                    0,
+                    clock.continuousNow - activeSession.continuousStartedAt
+                )
             )
         )
     }
@@ -282,17 +337,11 @@ public final class SessionEngine {
         guard case let .resetPending(pendingReset) = state else {
             throw SessionEngineError.invalidTransition
         }
-        if clock.now >= pendingReset.activeSession.endsAt {
-            enforcement.stop()
-            state = .completed(
-                CompletedSession(
-                    plan: pendingReset.activeSession.plan,
-                    completedAt: clock.now
-                )
-            )
+        if hasCompleted(pendingReset.activeSession) {
+            completeNormally(pendingReset.activeSession)
             return
         }
-        guard clock.now >= pendingReset.confirmationAvailableAt else {
+        guard clock.continuousNow >= pendingReset.continuousConfirmationAvailableAt else {
             throw SessionEngineError.earlyResetConfirmationNotReady
         }
 
@@ -308,7 +357,9 @@ public final class SessionEngine {
                     ActiveSession(
                         plan: plan,
                         startedAt: clock.now,
-                        endsAt: clock.now.addingTimeInterval(plan.duration.timeInterval)
+                        endsAt: clock.now.addingTimeInterval(plan.duration.timeInterval),
+                        continuousStartedAt: clock.continuousNow,
+                        continuousEndsAt: clock.continuousNow + plan.duration.timeInterval
                     )
                 )
             } catch {
@@ -316,21 +367,12 @@ public final class SessionEngine {
                 throw error
             }
 
-        case let .enforcing(activeSession) where clock.now >= activeSession.endsAt:
-            enforcement.stop()
-            state = .completed(
-                CompletedSession(plan: activeSession.plan, completedAt: clock.now)
-            )
+        case let .enforcing(activeSession) where hasCompleted(activeSession):
+            completeNormally(activeSession)
 
         case let .resetPending(pendingReset)
-            where clock.now >= pendingReset.activeSession.endsAt:
-            enforcement.stop()
-            state = .completed(
-                CompletedSession(
-                    plan: pendingReset.activeSession.plan,
-                    completedAt: clock.now
-                )
-            )
+            where hasCompleted(pendingReset.activeSession):
+            completeNormally(pendingReset.activeSession)
 
         default:
             break
@@ -351,9 +393,12 @@ public final class SessionEngine {
         case let .starting(_, startsAt):
             max(0, startsAt.timeIntervalSince(clock.now))
         case let .enforcing(activeSession):
-            max(0, activeSession.endsAt.timeIntervalSince(clock.now))
+            max(0, activeSession.continuousEndsAt - clock.continuousNow)
         case let .resetPending(pendingReset):
-            max(0, pendingReset.activeSession.endsAt.timeIntervalSince(clock.now))
+            max(
+                0,
+                pendingReset.activeSession.continuousEndsAt - clock.continuousNow
+            )
         default:
             nil
         }
@@ -363,14 +408,28 @@ public final class SessionEngine {
         guard case let .resetPending(pendingReset) = state else {
             return nil
         }
-        return max(0, pendingReset.confirmationAvailableAt.timeIntervalSince(clock.now))
+        return max(
+            0,
+            pendingReset.continuousConfirmationAvailableAt - clock.continuousNow
+        )
     }
 
     public var isEarlyResetConfirmationAvailable: Bool {
         guard case let .resetPending(pendingReset) = state else {
             return false
         }
-        return clock.now >= pendingReset.confirmationAvailableAt
+        return clock.continuousNow >= pendingReset.continuousConfirmationAvailableAt
+    }
+
+    private func hasCompleted(_ activeSession: ActiveSession) -> Bool {
+        clock.continuousNow >= activeSession.continuousEndsAt
+    }
+
+    private func completeNormally(_ activeSession: ActiveSession) {
+        enforcement.stop()
+        state = .completed(
+            CompletedSession(plan: activeSession.plan, completedAt: clock.now)
+        )
     }
 
     private func editableDraft() throws -> SessionDraft {

@@ -399,14 +399,48 @@ import Testing
 }
 
 @MainActor
+@Test func wallClockChangesCannotShortenTheEarlyResetCountdown() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 12_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Keynote",
+        bundleIdentifier: "com.apple.Keynote",
+        processIdentifier: 18
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    try engine.requestEarlyReset()
+
+    clock.adjustWallClock(by: 60 * 60)
+
+    #expect(engine.earlyResetRemainingTime() == 30)
+    #expect(engine.isEarlyResetConfirmationAvailable == false)
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 30)
+    try engine.advance()
+    #expect(engine.isEarlyResetConfirmationAvailable)
+}
+
+@MainActor
 private final class FakeClock: SessionClock {
     var now: Date
+    var continuousNow: TimeInterval = 0
 
     init(now: Date) {
         self.now = now
     }
 
     func advance(by seconds: TimeInterval) {
+        now = now.addingTimeInterval(seconds)
+        continuousNow += seconds
+    }
+
+    func adjustWallClock(by seconds: TimeInterval) {
         now = now.addingTimeInterval(seconds)
     }
 }

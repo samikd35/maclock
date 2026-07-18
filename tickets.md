@@ -25,21 +25,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 02 — Make application sessions safe to end early
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Let a user deliberately abandon an active application-only session without creating an instant distraction bypass. The same controlled exit applies from the visible action, Command-Q, and ordinary Quit.
 
 **Blocked by:** 01 — Run a complete application-only focus session.
 
-- [ ] End Session Early remains available from StayPane throughout enforcement.
-- [ ] Requesting an early reset starts a visible 30-second countdown while target enforcement remains active.
-- [ ] The reset countdown can be canceled and returns to the unchanged active session.
-- [ ] Finishing the countdown requires a final confirmation before access is restored.
-- [ ] Confirming stops enforcement, restores eligible windows, and produces an Ended Early outcome distinct from Completed.
-- [ ] Command-Q and ordinary Quit use the same early-reset flow during an active session.
-- [ ] No pause, duration-edit, or target-edit control exists after the session starts.
-- [ ] The interface explains that Force Quit is a deliberate bypass outside StayPane's honest self-control boundary.
-- [ ] Tests cover reset request, cancellation, countdown completion, confirmation refusal, confirmation acceptance, and race conditions at normal timer completion.
+- [x] End Session Early remains available from StayPane throughout enforcement.
+- [x] Requesting an early reset starts a visible 30-second countdown while target enforcement remains active.
+- [x] The reset countdown can be canceled and returns to the unchanged active session.
+- [x] Finishing the countdown requires a final confirmation before access is restored.
+- [x] Confirming stops enforcement, restores eligible windows, and produces an Ended Early outcome distinct from Completed.
+- [x] Command-Q and ordinary Quit use the same early-reset flow during an active session.
+- [x] No pause, duration-edit, or target-edit control exists after the session starts.
+- [x] The interface explains that Force Quit is a deliberate bypass outside StayPane's honest self-control boundary.
+- [x] Tests cover reset request, cancellation, countdown completion, confirmation refusal, confirmation acceptance, and race conditions at normal timer completion.
 
 ## 03 — Support multiple and closed application targets
 
