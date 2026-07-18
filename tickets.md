@@ -100,23 +100,23 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 06 — Recover sessions across sleep, crashes, and restarts
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Make application and window sessions reliable across ordinary Mac lifecycle events while always failing open when enforcement is no longer trustworthy.
 
 **Blocked by:** 02 — Make application sessions safe to end early; 04 — Enforce individual window targets precisely.
 
-- [ ] A session uses a fixed end time and continues while the Mac sleeps or the screen is locked.
-- [ ] In-process timing uses simulated/continuous time in tests and is not based on repeated real sleeps.
-- [ ] The immutable session configuration, end time, enforcement state, and necessary restoration state persist locally while active.
-- [ ] Relaunching StayPane before the end time resumes enforcement for the remaining duration.
-- [ ] Logging out or restarting the Mac resumes an unfinished session after login when recovery is available.
-- [ ] Launch at Login is enabled by default, can be disabled, and explains the resulting recovery limitation.
-- [ ] If the session expired while StayPane was unavailable, the next launch restores eligible windows and records completion rather than resuming.
-- [ ] Losing Accessibility permission stops all enforcement claims, restores what remains controllable, and produces an Interrupted outcome.
-- [ ] Recovery never reopens applications or windows the user closed.
-- [ ] Persistence and Session Engine tests cover every meaningful active and reset-pending recovery state.
-- [ ] Manual acceptance covers sleep, screen lock, application crash, logout, restart, login-item behavior, and expired offline sessions.
+- [x] A session uses a fixed end time and continues while the Mac sleeps or the screen is locked.
+- [x] In-process timing uses simulated/continuous time in tests and is not based on repeated real sleeps.
+- [x] The immutable session configuration, end time, enforcement state, and necessary restoration state persist locally while active.
+- [x] Relaunching StayPane before the end time resumes enforcement for the remaining duration.
+- [x] Logging out or restarting the Mac resumes an unfinished session after login when recovery is available.
+- [x] Launch at Login is enabled by default, can be disabled, and explains the resulting recovery limitation.
+- [x] If the session expired while StayPane was unavailable, the next launch restores eligible windows and records completion rather than resuming.
+- [x] Losing Accessibility permission stops all enforcement claims, restores what remains controllable, and produces an Interrupted outcome.
+- [x] Recovery never reopens applications or windows the user closed.
+- [x] Persistence and Session Engine tests cover every meaningful active and reset-pending recovery state.
+- [x] Manual acceptance covers sleep, screen lock, application crash, logout, restart, login-item behavior, and expired offline sessions.
 
 ## 07 — Record private history and export redacted diagnostics
 
