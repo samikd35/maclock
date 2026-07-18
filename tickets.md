@@ -82,21 +82,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 05 — Deliver the menu-bar and floating-timer experience
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Give an active session a calm, persistent Mac-native presence that remains reachable without competing with the user's work.
 
 **Blocked by:** 01 — Run a complete application-only focus session.
 
-- [ ] The menu bar shows the remaining time while a session is active.
-- [ ] Clicking the menu-bar item opens setup when idle and session status when active.
-- [ ] The active panel shows remaining time, allowed targets, enforcement status, and End Session Early without permitting edits.
-- [ ] An optional native floating timer stays above work without being injected into webpages.
-- [ ] The floating timer can move, collapse into a compact pill, and hide completely while the menu-bar timer remains.
-- [ ] Floating timer position and collapsed state persist locally between launches.
-- [ ] A non-destructive global shortcut opens the StayPane panel.
-- [ ] No global shortcut starts, resets, or quits a session.
-- [ ] The UI remains usable when notification permission is denied.
+- [x] The menu bar shows the remaining time while a session is active.
+- [x] Clicking the menu-bar item opens setup when idle and session status when active.
+- [x] The active panel shows remaining time, allowed targets, enforcement status, and End Session Early without permitting edits.
+- [x] An optional native floating timer stays above work without being injected into webpages.
+- [x] The floating timer can move, collapse into a compact pill, and hide completely while the menu-bar timer remains.
+- [x] Floating timer position and collapsed state persist locally between launches.
+- [x] A non-destructive global shortcut opens the StayPane panel.
+- [x] No global shortcut starts, resets, or quits a session.
+- [x] The UI remains usable when notification permission is denied.
 
 ## 06 — Recover sessions across sleep, crashes, and restarts
 
