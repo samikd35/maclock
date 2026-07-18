@@ -2,22 +2,25 @@ import Foundation
 import StayPaneBridgeProtocol
 import StayPaneCore
 
-enum BrowserBridgeError: Error, Equatable {
+enum NativeBridgeError: Error, Equatable {
     case disconnected
     case targetMissing
     case multipleTabTargetsUnsupported
+    case startConfirmationTimedOut
     case extensionReported(BridgeEnforcementErrorCode)
 }
 
-extension BrowserBridgeError: LocalizedError {
+extension NativeBridgeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .disconnected:
-            "The StayPane Chrome extension is disconnected. Connect it before starting a tab session."
+            "The StayPane Chrome extension is disconnected. Connect it before starting a Session with a Tab Target."
         case .targetMissing:
             "The selected Chrome tab is no longer available. Refresh and choose an open tab."
         case .multipleTabTargetsUnsupported:
-            "This version of StayPane supports one Chrome tab per session."
+            "This version of StayPane supports one Chrome Tab Target per Session."
+        case .startConfirmationTimedOut:
+            "The Chrome extension did not confirm Tab Activation Enforcement in time."
         case let .extensionReported(code):
             "Chrome could not enforce the selected tab (\(code.rawValue))."
         }
@@ -25,30 +28,50 @@ extension BrowserBridgeError: LocalizedError {
 }
 
 @MainActor
-final class BrowserBridgeController: BrowserSessionEnforcing {
-    private let server: LocalBridgeServer
+final class NativeBridgeController: TabActivationEnforcing {
+    private enum TabActivationState {
+        case idle
+        case awaitingConfirmation(BrowserTabTarget, deadline: Date)
+        case active(BrowserTabTarget)
+
+        var target: BrowserTabTarget? {
+            switch self {
+            case .idle:
+                nil
+            case let .awaitingConfirmation(target, _), let .active(target):
+                target
+            }
+        }
+    }
+
+    private let listener: LocalBridgeListener
+    private let now: () -> Date
     private var pendingConnections: Set<BridgeConnectionIdentifier> = []
-    private var profileByConnection: [BridgeConnectionIdentifier: String] = [:]
-    private var connectionByProfile: [String: BridgeConnectionIdentifier] = [:]
-    private var tabsByProfile: [String: [BridgeTabSnapshot]] = [:]
-    private var enforcedTarget: BrowserTabTarget?
-    private var enforcementFailure: BrowserBridgeError?
+    private var profileByConnection: [
+        BridgeConnectionIdentifier: BrowserProfileIdentifier
+    ] = [:]
+    private var connectionByProfile: [
+        BrowserProfileIdentifier: BridgeConnectionIdentifier
+    ] = [:]
+    private var tabsByProfile: [
+        BrowserProfileIdentifier: [BridgeTabSnapshot]
+    ] = [:]
+    private var tabActivationState: TabActivationState = .idle
+    private var enforcementFailure: NativeBridgeError?
 
     var onChange: (() -> Void)?
     var onBlockedTabActivation: (() -> Void)?
 
     init(
-        socketURL: URL = StayPaneBridgeSocketLocation.defaultURL
+        socketURL: URL = StayPaneBridgeSocketLocation.defaultURL,
+        now: @escaping () -> Date = Date.init
     ) throws {
-        server = try LocalBridgeServer(socketURL: socketURL)
+        listener = try LocalBridgeListener(socketURL: socketURL)
+        self.now = now
     }
 
     var isConnected: Bool {
         !connectionByProfile.isEmpty
-    }
-
-    var connectedProfileCount: Int {
-        connectionByProfile.count
     }
 
     func targets(for application: ApplicationTarget) -> [BrowserTabTarget] {
@@ -61,9 +84,7 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
                         return nil
                     }
                     return BrowserTabTarget(
-                        profileIdentifier: BrowserProfileIdentifier(
-                            rawValue: profileIdentifier
-                        ),
+                        profileIdentifier: profileIdentifier,
                         tabIdentifier: BrowserTabIdentifier(
                             rawValue: tab.tabIdentifier
                         ),
@@ -89,7 +110,7 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
 
     func poll() throws {
         var didChange = false
-        for event in try server.poll() {
+        for event in try listener.poll() {
             switch event {
             case let .connected(connection):
                 pendingConnections.insert(connection)
@@ -115,34 +136,58 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
     func preflight(targets: [BrowserTabTarget]) throws {
         try poll()
         guard targets.count <= 1 else {
-            throw BrowserBridgeError.multipleTabTargetsUnsupported
+            throw NativeBridgeError.multipleTabTargetsUnsupported
         }
         for target in targets {
             try validateAvailable(target)
         }
     }
 
-    func start(allowing targets: [BrowserTabTarget]) throws {
+    func start(
+        allowing targets: [BrowserTabTarget]
+    ) throws -> TabActivationStartResult {
         try preflight(targets: targets)
         guard let target = targets.first else {
-            enforcedTarget = nil
+            tabActivationState = .idle
             enforcementFailure = nil
-            return
+            return .active
         }
-        let profileIdentifier = target.profileIdentifier.rawValue
+        if let enforcementFailure {
+            throw enforcementFailure
+        }
+        switch tabActivationState {
+        case let .active(activeTarget)
+            where activeTarget.targetIdentifier == target.targetIdentifier:
+            return .active
+        case let .awaitingConfirmation(pendingTarget, deadline)
+            where pendingTarget.targetIdentifier == target.targetIdentifier:
+            guard now() < deadline else {
+                stop()
+                throw NativeBridgeError.startConfirmationTimedOut
+            }
+            return .awaitingConfirmation
+        case .idle, .active, .awaitingConfirmation:
+            stop()
+        }
+
+        let profileIdentifier = target.profileIdentifier
         guard let connection = connectionByProfile[profileIdentifier] else {
-            throw BrowserBridgeError.disconnected
+            throw NativeBridgeError.disconnected
         }
-        try server.send(
+        enforcementFailure = nil
+        try listener.send(
             .beginEnforcement(
-                profileIdentifier: profileIdentifier,
+                profileIdentifier: profileIdentifier.rawValue,
                 tabIdentifier: target.tabIdentifier.rawValue,
                 windowIdentifier: target.windowIdentifier.rawValue
             ),
             to: connection
         )
-        enforcedTarget = target
-        enforcementFailure = nil
+        tabActivationState = .awaitingConfirmation(
+            target,
+            deadline: now().addingTimeInterval(2)
+        )
+        return .awaitingConfirmation
     }
 
     func refresh() throws {
@@ -150,24 +195,24 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
         if let enforcementFailure {
             throw enforcementFailure
         }
-        if let enforcedTarget {
-            try validateAvailable(enforcedTarget)
+        if let target = tabActivationState.target {
+            try validateAvailable(target)
         }
     }
 
     func stop() {
-        guard let target = enforcedTarget else {
+        guard let target = tabActivationState.target else {
             enforcementFailure = nil
             return
         }
-        let profileIdentifier = target.profileIdentifier.rawValue
+        let profileIdentifier = target.profileIdentifier
         if let connection = connectionByProfile[profileIdentifier] {
-            try? server.send(
-                .endEnforcement(profileIdentifier: profileIdentifier),
+            try? listener.send(
+                .endEnforcement(profileIdentifier: profileIdentifier.rawValue),
                 to: connection
             )
         }
-        enforcedTarget = nil
+        tabActivationState = .idle
         enforcementFailure = nil
     }
 
@@ -186,54 +231,98 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
                 return true
             }
 
-            if let previous = connectionByProfile[profileIdentifier],
+            let profile = BrowserProfileIdentifier(rawValue: profileIdentifier)
+            if let connectedProfile = connectionByProfile.keys.first,
+               connectedProfile != profile {
+                reject(connection)
+                return true
+            }
+
+            if let previous = connectionByProfile[profile],
                previous != connection {
-                server.disconnect(previous)
+                listener.disconnect(previous)
                 _ = remove(connection: previous)
             }
             pendingConnections.remove(connection)
-            profileByConnection[connection] = profileIdentifier
-            connectionByProfile[profileIdentifier] = connection
-            tabsByProfile[profileIdentifier] = []
-            try server.send(
+            profileByConnection[connection] = profile
+            connectionByProfile[profile] = connection
+            tabsByProfile[profile] = []
+            try listener.send(
                 .helloAcknowledged(profileIdentifier: profileIdentifier),
                 to: connection
             )
-            try server.send(
+            try listener.send(
                 .requestTabs(profileIdentifier: profileIdentifier),
                 to: connection
             )
             return true
 
         case let .tabsSnapshot(profileIdentifier, tabs):
-            guard profileByConnection[connection] == profileIdentifier else {
+            guard let profile = validatedProfile(
+                profileIdentifier,
+                from: connection
+            ) else {
                 reject(connection)
                 return true
             }
-            tabsByProfile[profileIdentifier] = tabs.filter { !$0.isIncognito }
+            tabsByProfile[profile] = tabs.filter { !$0.isIncognito }
             return true
 
         case let .tabActivated(profileIdentifier, _, _):
-            guard profileByConnection[connection] == profileIdentifier else {
+            guard validatedProfile(profileIdentifier, from: connection) != nil else {
                 reject(connection)
                 return true
             }
             return false
 
         case let .blockedTabActivation(profileIdentifier, _, _):
-            guard profileByConnection[connection] == profileIdentifier else {
+            guard validatedProfile(profileIdentifier, from: connection) != nil else {
                 reject(connection)
                 return true
             }
             onBlockedTabActivation?()
             return false
 
-        case let .enforcementError(profileIdentifier, code):
-            guard profileByConnection[connection] == profileIdentifier else {
+        case let .tabActivationStarted(
+            profileIdentifier,
+            tabIdentifier,
+            windowIdentifier
+        ):
+            guard let profile = validatedProfile(
+                profileIdentifier,
+                from: connection
+            ) else {
                 reject(connection)
                 return true
             }
-            if enforcedTarget?.profileIdentifier.rawValue == profileIdentifier {
+            switch tabActivationState {
+            case let .awaitingConfirmation(target, _)
+                where target.profileIdentifier == profile
+                    && target.tabIdentifier.rawValue == tabIdentifier
+                    && target.windowIdentifier.rawValue == windowIdentifier:
+                tabActivationState = .active(target)
+            case .idle:
+                return false
+            case let .active(target)
+                where target.profileIdentifier == profile
+                    && target.tabIdentifier.rawValue == tabIdentifier
+                    && target.windowIdentifier.rawValue == windowIdentifier:
+                return false
+            case .awaitingConfirmation, .active:
+                reject(connection)
+                return true
+            }
+            return false
+
+        case let .enforcementError(profileIdentifier, code):
+            guard let profile = validatedProfile(
+                profileIdentifier,
+                from: connection
+            ) else {
+                reject(connection)
+                return true
+            }
+            if tabActivationState.target?.profileIdentifier == profile {
                 enforcementFailure = .extensionReported(code)
             }
             return false
@@ -246,16 +335,16 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
     }
 
     private func validateAvailable(_ target: BrowserTabTarget) throws {
-        let profileIdentifier = target.profileIdentifier.rawValue
+        let profileIdentifier = target.profileIdentifier
         guard connectionByProfile[profileIdentifier] != nil else {
-            throw BrowserBridgeError.disconnected
+            throw NativeBridgeError.disconnected
         }
         guard tabsByProfile[profileIdentifier]?.contains(where: {
             !$0.isIncognito
                 && $0.tabIdentifier == target.tabIdentifier.rawValue
                 && $0.windowIdentifier == target.windowIdentifier.rawValue
         }) == true else {
-            throw BrowserBridgeError.targetMissing
+            throw NativeBridgeError.targetMissing
         }
     }
 
@@ -270,7 +359,7 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
         if connectionByProfile[profileIdentifier] == connection {
             connectionByProfile.removeValue(forKey: profileIdentifier)
             tabsByProfile.removeValue(forKey: profileIdentifier)
-            if enforcedTarget?.profileIdentifier.rawValue == profileIdentifier {
+            if tabActivationState.target?.profileIdentifier == profileIdentifier {
                 enforcementFailure = .disconnected
             }
         }
@@ -278,8 +367,18 @@ final class BrowserBridgeController: BrowserSessionEnforcing {
     }
 
     private func reject(_ connection: BridgeConnectionIdentifier) {
-        server.disconnect(connection)
+        listener.disconnect(connection)
         _ = remove(connection: connection)
+    }
+
+    private func validatedProfile(
+        _ rawValue: String,
+        from connection: BridgeConnectionIdentifier
+    ) -> BrowserProfileIdentifier? {
+        let profileIdentifier = BrowserProfileIdentifier(rawValue: rawValue)
+        return profileByConnection[connection] == profileIdentifier
+            ? profileIdentifier
+            : nil
     }
 
     private func faviconData(from dataURL: String?) -> Data? {

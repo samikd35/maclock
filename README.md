@@ -32,11 +32,11 @@ Sessions support multiple broad application targets, exact windows, or one indiv
 Chrome integration is entirely local and does not require a Google developer account or Chrome Web Store listing.
 
 1. Build the packaged app and extension with `make app`, then open `.build/StayPane.app`.
-2. In StayPane, choose **Register Local Bridge**. This writes a user-level native-host manifest that accepts only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
+2. In StayPane, choose **Register Native Host**. This Native Host Registration writes a user-level manifest that accepts only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
 3. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `.build/StayPane.app/Contents/Resources/ChromeExtension` (the **Show Extension Folder** button reveals it).
 4. Return to StayPane and wait for **Connected**. Expand Google Chrome to choose a tab grouped beneath its Chrome window.
 
-The extension sends current tab metadata only through Chrome native messaging to the packaged bridge, which proxies it over a user-only Unix socket to StayPane. There is no StayPane server, analytics endpoint, or remote browsing-data transport. Incognito access is disabled. Pinning the extension makes its brief, rate-limited blocked-tab badge easier to see. Full verification steps are in [`docs/manual-testing/ticket-08-chrome-tab.md`](docs/manual-testing/ticket-08-chrome-tab.md).
+The extension sends current tab metadata only through Chrome native messaging to the packaged Native Bridge, which proxies it over a user-only Unix socket to StayPane. There is no StayPane server, analytics endpoint, or remote browsing-data transport. Incognito access is disabled. Ticket 08 accepts one connected Chrome Profile; profile-aware hardening remains Ticket 12. Pinning the extension makes its brief, rate-limited blocked-tab badge easier to see. Full verification steps are in [`docs/manual-testing/ticket-08-chrome-tab.md`](docs/manual-testing/ticket-08-chrome-tab.md).
 
 Platform-dependent acceptance steps for multiple displays, Spaces, full-screen windows, system dialogs, and restoration are documented in [`docs/manual-testing/ticket-04-window-enforcement.md`](docs/manual-testing/ticket-04-window-enforcement.md).
 

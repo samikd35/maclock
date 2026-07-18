@@ -43,11 +43,27 @@ import Testing
     #expect(decoded.direction == .extensionToNative)
 }
 
+@Test func tabActivationStartConfirmationRoundTripsTowardTheMacApp() throws {
+    let message = BridgeMessage.tabActivationStarted(
+        profileIdentifier: "profile-one",
+        tabIdentifier: 41,
+        windowIdentifier: 9
+    )
+
+    #expect(
+        try BridgeMessageCodec.decode(BridgeMessageCodec.encode(message))
+            == message
+    )
+    #expect(message.direction == .extensionToNative)
+}
+
 @Test(arguments: [
     #"{"version":2,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#,
     #"{"version":1,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
     #"{"version":1,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
     #"{"version":1,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
+    #"{"version":1,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
+    #"{"version":1,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
     #"{"version":1,"type":"unknown"}"#
 ])
 func malformedNativeMessagesAreRejected(_ json: String) {

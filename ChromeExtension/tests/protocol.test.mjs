@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   fitTabsToNativeMessageBudget,
   makeHello,
+  makeTabActivationStarted,
   parseNativeMessage,
 } from "../dist/protocol.js";
 
@@ -14,6 +15,16 @@ test("creates the fixed identity handshake", () => {
     type: "hello",
     extensionId: EXTENSION_ID,
     profileId: "profile_one",
+  });
+});
+
+test("confirms Tab Activation Enforcement with exact target identity", () => {
+  assert.deepEqual(makeTabActivationStarted("profile_one", 41, 9), {
+    version: 1,
+    type: "tabActivationStarted",
+    profileId: "profile_one",
+    tabId: 41,
+    windowId: 9,
   });
 });
 

@@ -3,18 +3,18 @@ import Testing
 @testable import StayPaneCore
 
 @MainActor
-@Test func disconnectedBrowserPreflightRefusesToStartATabSession() throws {
-    let browser = BrowserTestEnforcement(preflightError: .disconnected)
+@Test func disconnectedTabActivationPreflightRefusesSessionStart() throws {
+    let browser = TabActivationTestEnforcement(preflightError: .disconnected)
     let engine = SessionEngine(
-        clock: BrowserTestClock(),
-        enforcement: BrowserTestNativeEnforcement(),
-        browserEnforcement: browser
+        clock: TabTargetTestClock(),
+        enforcement: ApplicationAndWindowTestEnforcement(),
+        tabActivationEnforcement: browser
     )
     engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
     let tab = makeBrowserTabTarget()
     engine.select(target: .browserTab(tab))
 
-    #expect(throws: BrowserTestError.disconnected) {
+    #expect(throws: TabActivationTestError.disconnected) {
         try engine.beginStartCountdown()
     }
 
@@ -27,14 +27,14 @@ import Testing
 }
 
 @MainActor
-@Test func tabSessionCoordinatesNativeAndBrowserEnforcementUntilCompletion() throws {
-    let clock = BrowserTestClock()
-    let native = BrowserTestNativeEnforcement()
-    let browser = BrowserTestEnforcement()
+@Test func tabTargetSessionCoordinatesBothEnforcementAdaptersUntilCompletion() throws {
+    let clock = TabTargetTestClock()
+    let native = ApplicationAndWindowTestEnforcement()
+    let browser = TabActivationTestEnforcement()
     let engine = SessionEngine(
         clock: clock,
         enforcement: native,
-        browserEnforcement: browser
+        tabActivationEnforcement: browser
     )
     engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
     let tab = makeBrowserTabTarget()
@@ -58,14 +58,49 @@ import Testing
 }
 
 @MainActor
-@Test func lostBrowserConnectionCanFailOpenAnActiveTabSession() throws {
-    let clock = BrowserTestClock()
-    let native = BrowserTestNativeEnforcement()
-    let browser = BrowserTestEnforcement()
+@Test func extensionFailureDuringStartReturnsToReadyBeforeNativeEnforcement() throws {
+    let clock = TabTargetTestClock()
+    let native = ApplicationAndWindowTestEnforcement()
+    let tabActivation = TabActivationTestEnforcement()
+    tabActivation.startResult = .awaitingConfirmation
     let engine = SessionEngine(
         clock: clock,
         enforcement: native,
-        browserEnforcement: browser
+        tabActivationEnforcement: tabActivation
+    )
+    engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
+    let tab = makeBrowserTabTarget()
+    engine.select(target: .browserTab(tab))
+    try engine.beginStartCountdown(seconds: 0)
+
+    try engine.advance()
+    guard case .starting = engine.state else {
+        Issue.record("The Session must wait for extension confirmation.")
+        return
+    }
+    #expect(native.startedTargets.isEmpty)
+
+    tabActivation.startError = .disconnected
+    #expect(throws: TabActivationTestError.disconnected) {
+        try engine.advance()
+    }
+    guard case let .ready(draft) = engine.state else {
+        Issue.record("A failed extension start must return to Ready.")
+        return
+    }
+    #expect(draft.targets == [.browserTab(tab)])
+    #expect(native.startedTargets.isEmpty)
+}
+
+@MainActor
+@Test func lostBridgeConnectionCanFailOpenAnActiveTabTargetSession() throws {
+    let clock = TabTargetTestClock()
+    let native = ApplicationAndWindowTestEnforcement()
+    let browser = TabActivationTestEnforcement()
+    let engine = SessionEngine(
+        clock: clock,
+        enforcement: native,
+        tabActivationEnforcement: browser
     )
     engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
     engine.select(target: .browserTab(makeBrowserTabTarget()))
@@ -73,7 +108,7 @@ import Testing
     try engine.advance()
     browser.refreshError = .disconnected
 
-    #expect(throws: BrowserTestError.disconnected) {
+    #expect(throws: TabActivationTestError.disconnected) {
         try engine.advance()
     }
     try engine.interrupt(reason: .enforcementUnavailable)
@@ -88,9 +123,9 @@ import Testing
 
 @MainActor
 @Test func recoveryResumesBothSidesOfATabSession() throws {
-    let clock = BrowserTestClock()
+    let clock = TabTargetTestClock()
     let tab = makeBrowserTabTarget()
-    let recovery = BrowserTestRecoveryStore(
+    let recovery = TabTargetTestRecoveryStore(
         snapshot: SessionRecoverySnapshot(
             plan: SessionPlan(
                 duration: SessionDuration(seconds: 60)!,
@@ -102,12 +137,12 @@ import Testing
             phase: .enforcing
         )
     )
-    let native = BrowserTestNativeEnforcement()
-    let browser = BrowserTestEnforcement()
+    let native = ApplicationAndWindowTestEnforcement()
+    let browser = TabActivationTestEnforcement()
     let engine = SessionEngine(
         clock: clock,
         enforcement: native,
-        browserEnforcement: browser,
+        tabActivationEnforcement: browser,
         recoveryStore: recovery
     )
 
@@ -135,7 +170,7 @@ private func makeBrowserTabTarget(
 }
 
 @MainActor
-private final class BrowserTestClock: SessionClock {
+private final class TabTargetTestClock: SessionClock {
     var now = Date(timeIntervalSince1970: 80_000)
     var continuousNow: TimeInterval = 200
 
@@ -146,7 +181,7 @@ private final class BrowserTestClock: SessionClock {
 }
 
 @MainActor
-private final class BrowserTestNativeEnforcement: SessionEnforcing {
+private final class ApplicationAndWindowTestEnforcement: SessionEnforcing {
     private(set) var startedTargets: [SessionTarget] = []
     private(set) var stopCount = 0
 
@@ -160,14 +195,16 @@ private final class BrowserTestNativeEnforcement: SessionEnforcing {
 }
 
 @MainActor
-private final class BrowserTestEnforcement: BrowserSessionEnforcing {
-    private let preflightError: BrowserTestError?
+private final class TabActivationTestEnforcement: TabActivationEnforcing {
+    private let preflightError: TabActivationTestError?
     private(set) var preflightTargets: [BrowserTabTarget] = []
     private(set) var startedTargets: [BrowserTabTarget] = []
     private(set) var stopCount = 0
-    var refreshError: BrowserTestError?
+    var refreshError: TabActivationTestError?
+    var startError: TabActivationTestError?
+    var startResult: TabActivationStartResult = .active
 
-    init(preflightError: BrowserTestError? = nil) {
+    init(preflightError: TabActivationTestError? = nil) {
         self.preflightError = preflightError
     }
 
@@ -178,8 +215,14 @@ private final class BrowserTestEnforcement: BrowserSessionEnforcing {
         }
     }
 
-    func start(allowing targets: [BrowserTabTarget]) throws {
+    func start(
+        allowing targets: [BrowserTabTarget]
+    ) throws -> TabActivationStartResult {
+        if let startError {
+            throw startError
+        }
         startedTargets = targets
+        return startResult
     }
     func refresh() throws {
         if let refreshError {
@@ -192,7 +235,7 @@ private final class BrowserTestEnforcement: BrowserSessionEnforcing {
 }
 
 @MainActor
-private final class BrowserTestRecoveryStore: SessionRecoveryPersisting {
+private final class TabTargetTestRecoveryStore: SessionRecoveryPersisting {
     private var snapshot: SessionRecoverySnapshot?
 
     init(snapshot: SessionRecoverySnapshot?) {
@@ -216,6 +259,6 @@ private final class BrowserTestRecoveryStore: SessionRecoveryPersisting {
     }
 }
 
-private enum BrowserTestError: Error, Equatable {
+private enum TabActivationTestError: Error, Equatable {
     case disconnected
 }

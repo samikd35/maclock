@@ -69,7 +69,7 @@ public struct NativeMessagingHostInstaller: Sendable {
         )
         let manifest = NativeMessagingHostManifest(
             name: StayPaneBridgeConstants.nativeHostName,
-            description: "StayPane local Chrome bridge",
+            description: "StayPane Native Bridge",
             path: hostExecutableURL.standardizedFileURL.path,
             type: "stdio",
             allowedOrigins: [StayPaneBridgeConstants.allowedOrigin]

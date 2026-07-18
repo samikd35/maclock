@@ -18,8 +18,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var browserTabsByApplicationID: [
         String: [BrowserTabTarget]
     ] = [:]
-    @Published private(set) var browserBridgeConnected = false
-    @Published private(set) var browserBridgeInstalled = false
+    @Published private(set) var nativeBridgeConnected = false
+    @Published private(set) var nativeHostRegistered = false
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
     @Published var expandedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
@@ -43,7 +43,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let enforcement: ApplicationEnforcementController
     private let historyController: SessionHistoryController
     private let diagnosticLog: DiagnosticLog
-    private let browserBridge: BrowserBridgeController?
+    private let nativeBridge: NativeBridgeController?
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
@@ -69,18 +69,18 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         let historyStore = FileSessionHistoryStore()
         historyController = SessionHistoryController(store: historyStore)
         diagnosticLog = DiagnosticLog()
-        let createdBrowserBridge = try? BrowserBridgeController()
-        browserBridge = createdBrowserBridge
-        let browserEnforcement: any BrowserSessionEnforcing
-        if let createdBrowserBridge {
-            browserEnforcement = createdBrowserBridge
+        let createdNativeBridge = try? NativeBridgeController()
+        nativeBridge = createdNativeBridge
+        let tabActivationEnforcement: any TabActivationEnforcing
+        if let createdNativeBridge {
+            tabActivationEnforcement = createdNativeBridge
         } else {
-            browserEnforcement = UnavailableBrowserSessionEnforcement()
+            tabActivationEnforcement = UnavailableTabActivationEnforcement()
         }
         engine = SessionEngine(
             clock: SystemSessionClock(),
             enforcement: enforcement,
-            browserEnforcement: browserEnforcement,
+            tabActivationEnforcement: tabActivationEnforcement,
             recoveryStore: sessionRecoveryStore,
             historyStore: historyStore
         )
@@ -113,10 +113,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             self?.recordDiagnostic(.restorationRecovered)
             self?.showNotice("No pending window restorations remain.")
         }
-        browserBridge?.onChange = { [weak self] in
+        nativeBridge?.onChange = { [weak self] in
             self?.synchronizeBrowserPresentation()
         }
-        browserBridge?.onBlockedTabActivation = { [weak self] in
+        nativeBridge?.onBlockedTabActivation = { [weak self] in
             self?.recordDiagnostic(.blockedTarget)
             self?.showNotice(
                 "StayPane returned Chrome to the allowed tab."
@@ -173,9 +173,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         shouldExplainAccessibility = !defaults.bool(forKey: Self.accessibilityIntroKey)
             || !accessibilityGranted
         refreshApplications()
-        try? browserBridge?.poll()
+        try? nativeBridge?.poll()
         synchronizeBrowserPresentation()
-        refreshChromeBridgeSetupStatus()
+        refreshNativeHostRegistrationStatus()
         if let startupNotice {
             showNotice(startupNotice)
         }
@@ -248,7 +248,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                     $0.id == target.bundleIdentifier
                 })?.isAvailable == true
             }
-            && (selectedBrowserTabIDs.isEmpty || browserBridgeConnected)
+            && (selectedBrowserTabIDs.isEmpty || nativeBridgeConnected)
             && SessionDuration(seconds: durationSeconds) != nil
     }
 
@@ -406,8 +406,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         applicationID == "com.google.Chrome"
     }
 
-    func installChromeBridge() {
-        guard let executableURL = chromeBridgeExecutableURL else {
+    func registerNativeHost() {
+        guard let executableURL = nativeHostExecutableURL else {
             showNotice(
                 "StayPaneBridge is missing. Build the app with ‘make app’, then try setup again."
             )
@@ -417,12 +417,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             let manifestURL = try NativeMessagingHostInstaller().install(
                 hostExecutableURL: executableURL
             )
-            refreshChromeBridgeSetupStatus()
+            refreshNativeHostRegistrationStatus()
             showNotice(
-                "Chrome bridge registered locally at \(manifestURL.path). Reload the extension in Chrome."
+                "Native Host Registration saved locally at \(manifestURL.path). Reload the extension in Chrome."
             )
         } catch {
-            refreshChromeBridgeSetupStatus()
+            refreshNativeHostRegistrationStatus()
             showNotice(error.localizedDescription)
         }
     }
@@ -579,11 +579,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             return
         }
         guard !configuredTargets.isEmpty else {
-            showNotice("Choose at least one application or window to allow.")
+            showNotice("Choose at least one Application, Window, or Tab Target to allow.")
             return
         }
         do {
-            try browserBridge?.preflight(
+            try nativeBridge?.preflight(
                 targets: configuredTargets.compactMap { target in
                     guard case let .browserTab(tab) = target else {
                         return nil
@@ -767,7 +767,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func tick() {
         do {
-            try browserBridge?.poll()
+            try nativeBridge?.poll()
         } catch {
             if isActiveSession {
                 failOpen(after: error)
@@ -954,11 +954,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     private func synchronizeBrowserPresentation() {
-        browserBridgeConnected = browserBridge?.isConnected == true
+        nativeBridgeConnected = nativeBridge?.isConnected == true
         var refreshed: [String: [BrowserTabTarget]] = [:]
         for application in applications
             where isChromeApplication(application.id) {
-            refreshed[application.id] = browserBridge?.targets(
+            refreshed[application.id] = nativeBridge?.targets(
                 for: application.target
             ) ?? []
         }
@@ -986,17 +986,17 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
     }
 
-    private func refreshChromeBridgeSetupStatus() {
-        guard let executableURL = chromeBridgeExecutableURL else {
-            browserBridgeInstalled = false
+    private func refreshNativeHostRegistrationStatus() {
+        guard let executableURL = nativeHostExecutableURL else {
+            nativeHostRegistered = false
             return
         }
-        browserBridgeInstalled = NativeMessagingHostInstaller().isInstalled(
+        nativeHostRegistered = NativeMessagingHostInstaller().isInstalled(
             hostExecutableURL: executableURL
         )
     }
 
-    private var chromeBridgeExecutableURL: URL? {
+    private var nativeHostExecutableURL: URL? {
         guard let executableDirectory = Bundle.main.executableURL?
             .deletingLastPathComponent()
         else {

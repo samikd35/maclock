@@ -6,7 +6,7 @@ import Testing
     let socketURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("staypane-\(UUID().uuidString).sock")
     defer { try? FileManager.default.removeItem(at: socketURL) }
-    let server = try LocalBridgeServer(socketURL: socketURL)
+    let listener = try LocalBridgeListener(socketURL: socketURL)
     let client = try LocalBridgeClient(socketURL: socketURL)
     let hello = BridgeMessage.hello(
         extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
@@ -14,7 +14,7 @@ import Testing
     )
 
     try client.send(hello)
-    let events = try server.poll()
+    let events = try listener.poll()
 
     let connected = try #require(
         events.compactMap { event -> BridgeConnectionIdentifier? in
@@ -29,7 +29,7 @@ import Testing
     let acknowledgment = BridgeMessage.helloAcknowledged(
         profileIdentifier: "profile-one"
     )
-    try server.send(acknowledgment, to: connected)
+    try listener.send(acknowledgment, to: connected)
     #expect(try client.readNextMessage() == acknowledgment)
 }
 
@@ -37,11 +37,11 @@ import Testing
     let socketURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("staypane-\(UUID().uuidString).sock")
     defer { try? FileManager.default.removeItem(at: socketURL) }
-    let server = try LocalBridgeServer(socketURL: socketURL)
+    let listener = try LocalBridgeListener(socketURL: socketURL)
     let client = try LocalBridgeClient(socketURL: socketURL)
 
     #expect(throws: BridgeProtocolError.invalidSchema) {
         try client.send(.requestTabs(profileIdentifier: "profile-one"))
     }
-    withExtendedLifetime(server) {}
+    withExtendedLifetime(listener) {}
 }

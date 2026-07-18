@@ -1,0 +1,3 @@
+# Use a local versioned Native Bridge with a fixed unpacked identity
+
+The Chrome extension and macOS application communicate through a versioned, schema-validated protocol: Chrome launches a native-messaging host restricted to the fixed extension ID derived from the public manifest key, and that host proxies framed messages to StayPane over a user-only Unix socket. This keeps the browser and app contexts independently testable, gives each Chrome Profile an independent wire identity without an account or remote service, and makes identity or protocol mismatches fail closed at the Native Bridge boundary while Session enforcement still fails open for the user.

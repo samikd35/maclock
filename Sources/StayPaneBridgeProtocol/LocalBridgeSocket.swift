@@ -35,7 +35,7 @@ public enum StayPaneBridgeSocketLocation {
     }
 }
 
-public final class LocalBridgeServer {
+public final class LocalBridgeListener {
     private struct Connection {
         let fileDescriptor: Int32
         var buffer = Data()

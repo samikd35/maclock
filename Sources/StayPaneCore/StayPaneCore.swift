@@ -480,21 +480,22 @@ public final class SessionEngine {
     public private(set) var didFailToRecordHistory = false
 
     private let clock: any SessionClock
-    private let enforcement: any SessionEnforcing
-    private let browserEnforcement: any BrowserSessionEnforcing
+    private let enforcement: CoordinatedSessionEnforcement
     private let recoveryStore: any SessionRecoveryPersisting
     private let historyStore: any SessionHistoryStoring
 
     public init(
         clock: any SessionClock,
         enforcement: any SessionEnforcing,
-        browserEnforcement: any BrowserSessionEnforcing = UnavailableBrowserSessionEnforcement(),
+        tabActivationEnforcement: any TabActivationEnforcing = UnavailableTabActivationEnforcement(),
         recoveryStore: any SessionRecoveryPersisting = NoSessionRecoveryStore(),
         historyStore: any SessionHistoryStoring = NoSessionHistoryStore()
     ) {
         self.clock = clock
-        self.enforcement = enforcement
-        self.browserEnforcement = browserEnforcement
+        self.enforcement = CoordinatedSessionEnforcement(
+            applicationAndWindowEnforcement: enforcement,
+            tabActivationEnforcement: tabActivationEnforcement
+        )
         self.recoveryStore = recoveryStore
         self.historyStore = historyStore
     }
@@ -584,14 +585,7 @@ public final class SessionEngine {
         guard !draft.targets.isEmpty else {
             throw SessionEngineError.targetRequired
         }
-        try browserEnforcement.preflight(
-            targets: draft.targets.compactMap { target in
-                guard case let .browserTab(tab) = target else {
-                    return nil
-                }
-                return tab
-            }
-        )
+        try enforcement.preflight(targets: draft.targets)
 
         let plan = SessionPlan(
             duration: draft.duration,
@@ -606,6 +600,7 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
 
+        enforcement.stop()
         state = .ready(SessionDraft(duration: plan.duration, targets: plan.targets))
     }
 
@@ -666,11 +661,9 @@ public final class SessionEngine {
             try recoveryStore.clear()
         } catch {
             enforcement.stop()
-            browserEnforcement.stop()
             throw error
         }
         enforcement.stop()
-        browserEnforcement.stop()
         let activeSession = pendingReset.activeSession
         state = .endedEarly(
             EndedEarlySession(
@@ -708,15 +701,8 @@ public final class SessionEngine {
         switch state {
         case let .starting(plan, startsAt) where clock.now >= startsAt:
             do {
-                let browserTargets = browserTargets(in: plan.targets)
-                try browserEnforcement.start(allowing: browserTargets)
-                do {
-                    try enforcement.start(
-                        allowing: nativeTargets(for: plan.targets)
-                    )
-                } catch {
-                    browserEnforcement.stop()
-                    throw error
+                guard try enforcement.start(allowing: plan.targets) else {
+                    return
                 }
                 let activeSession = ActiveSession(
                     plan: plan,
@@ -732,13 +718,13 @@ public final class SessionEngine {
                     )
                 } catch {
                     enforcement.stop()
-                    browserEnforcement.stop()
                     state = .ready(
                         SessionDraft(duration: plan.duration, targets: plan.targets)
                     )
                     throw error
                 }
             } catch {
+                enforcement.stop()
                 state = .ready(SessionDraft(duration: plan.duration, targets: plan.targets))
                 throw error
             }
@@ -748,7 +734,6 @@ public final class SessionEngine {
 
         case .enforcing:
             try enforcement.refresh()
-            try browserEnforcement.refresh()
 
         case let .resetPending(pendingReset)
             where hasCompleted(pendingReset.activeSession):
@@ -756,7 +741,6 @@ public final class SessionEngine {
 
         case .resetPending:
             try enforcement.refresh()
-            try browserEnforcement.refresh()
 
         default:
             break
@@ -764,12 +748,12 @@ public final class SessionEngine {
     }
 
     public func reset() {
-        if case .enforcing = state {
+        if case .starting = state {
             enforcement.stop()
-            browserEnforcement.stop()
+        } else if case .enforcing = state {
+            enforcement.stop()
         } else if case .resetPending = state {
             enforcement.stop()
-            browserEnforcement.stop()
         }
         try? recoveryStore.clear()
         state = .idle
@@ -803,11 +787,9 @@ public final class SessionEngine {
             try protectInterruptedSession()
         } catch {
             enforcement.stop()
-            browserEnforcement.stop()
             throw error
         }
         enforcement.stop()
-        browserEnforcement.stop()
     }
 
     @discardableResult
@@ -818,8 +800,7 @@ public final class SessionEngine {
         let remaining = snapshot.endsAt.timeIntervalSince(clock.now)
         guard remaining > 0 else {
             try recoveryStore.clear()
-            enforcement.stop()
-            browserEnforcement.stop()
+            enforcement.restorePersistedState()
             state = .completed(
                 CompletedSession(plan: snapshot.plan, completedAt: snapshot.endsAt)
             )
@@ -843,16 +824,8 @@ public final class SessionEngine {
             continuousEndsAt: clock.continuousNow + remaining
         )
         do {
-            try browserEnforcement.resume(
-                allowing: browserTargets(in: snapshot.plan.targets)
-            )
-            do {
-                try enforcement.resume(
-                    allowing: nativeTargets(for: snapshot.plan.targets)
-                )
-            } catch {
-                browserEnforcement.stop()
-                throw error
+            guard try enforcement.resume(allowing: snapshot.plan.targets) else {
+                throw TabActivationEnforcementError.unavailable
             }
         } catch {
             let recoveryError = error
@@ -877,8 +850,7 @@ public final class SessionEngine {
                 )
             )
             try? protectInterruptedSession()
-            enforcement.stop()
-            browserEnforcement.stop()
+            enforcement.restorePersistedState()
             throw recoveryError
         }
         switch snapshot.phase {
@@ -943,11 +915,9 @@ public final class SessionEngine {
             try recoveryStore.clear()
         } catch {
             enforcement.stop()
-            browserEnforcement.stop()
             throw error
         }
         enforcement.stop()
-        browserEnforcement.stop()
         state = .completed(
             CompletedSession(plan: activeSession.plan, completedAt: clock.now)
         )
@@ -967,36 +937,6 @@ public final class SessionEngine {
                 result: result
             )
         )
-    }
-
-    private func browserTargets(
-        in targets: [SessionTarget]
-    ) -> [BrowserTabTarget] {
-        targets.compactMap { target in
-            guard case let .browserTab(tab) = target else {
-                return nil
-            }
-            return tab
-        }
-    }
-
-    private func nativeTargets(
-        for targets: [SessionTarget]
-    ) -> [SessionTarget] {
-        var mappedTargets: [SessionTarget] = []
-        for target in targets {
-            let mappedTarget: SessionTarget
-            switch target {
-            case let .browserTab(tab):
-                mappedTarget = .application(tab.application)
-            case .application, .window:
-                mappedTarget = target
-            }
-            if !mappedTargets.contains(where: { $0.id == mappedTarget.id }) {
-                mappedTargets.append(mappedTarget)
-            }
-        }
-        return mappedTargets
     }
 
     private func recordHistory(_ record: SessionHistoryRecord) {

@@ -127,6 +127,23 @@ export function makeBlockedTabActivation(
   };
 }
 
+export function makeTabActivationStarted(
+  profileId: string,
+  tabId: number,
+  windowId: number,
+) {
+  requireProfileIdentifier(profileId);
+  requireIdentifier(tabId);
+  requireIdentifier(windowId);
+  return {
+    version: PROTOCOL_VERSION,
+    type: "tabActivationStarted" as const,
+    profileId,
+    tabId,
+    windowId,
+  };
+}
+
 export function makeEnforcementError(
   profileId: string,
   code: "targetMissing" | "activationFailed" | "invalidCommand",

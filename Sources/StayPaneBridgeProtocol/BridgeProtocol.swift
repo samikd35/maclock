@@ -67,6 +67,11 @@ public enum BridgeMessage: Equatable, Sendable {
         attemptedTabIdentifier: Int,
         allowedTabIdentifier: Int
     )
+    case tabActivationStarted(
+        profileIdentifier: String,
+        tabIdentifier: Int,
+        windowIdentifier: Int
+    )
     case enforcementError(
         profileIdentifier: String,
         code: BridgeEnforcementErrorCode
@@ -82,7 +87,8 @@ public enum BridgeMessage: Equatable, Sendable {
     public var direction: BridgeMessageDirection {
         switch self {
         case .hello, .tabsSnapshot, .tabActivated,
-             .blockedTabActivation, .enforcementError:
+             .blockedTabActivation, .tabActivationStarted,
+             .enforcementError:
             .extensionToNative
         case .helloAcknowledged, .requestTabs, .beginEnforcement,
              .endEnforcement:
@@ -187,6 +193,23 @@ public enum BridgeMessageCodec {
                 )
             )
 
+        case "tabActivationStarted":
+            try requireKeys(
+                dictionary,
+                exactly: ["version", "type", "profileId", "tabId", "windowId"]
+            )
+            return .tabActivationStarted(
+                profileIdentifier: try requiredProfileIdentifier(dictionary),
+                tabIdentifier: try requiredPositiveInteger(
+                    dictionary,
+                    key: "tabId"
+                ),
+                windowIdentifier: try requiredPositiveInteger(
+                    dictionary,
+                    key: "windowId"
+                )
+            )
+
         case "enforcementError":
             try requireKeys(
                 dictionary,
@@ -276,6 +299,17 @@ public enum BridgeMessageCodec {
                 "attemptedTabId": attemptedTabIdentifier,
                 "allowedTabId": allowedTabIdentifier
             ]) { _, new in new }
+        case let .tabActivationStarted(
+            profileIdentifier,
+            tabIdentifier,
+            windowIdentifier
+        ):
+            object.merge([
+                "type": "tabActivationStarted",
+                "profileId": profileIdentifier,
+                "tabId": tabIdentifier,
+                "windowId": windowIdentifier
+            ]) { _, new in new }
         case let .enforcementError(profileIdentifier, code):
             object.merge([
                 "type": "enforcementError",
@@ -336,7 +370,7 @@ public enum BridgeMessageCodec {
         let faviconDataURL: String?
         if let rawFavicon = dictionary["faviconDataUrl"] {
             guard let favicon = validatedString(rawFavicon, maximum: 65_536),
-                  favicon.hasPrefix("data:image/png;base64,")
+                  validatedPNGData(from: favicon) != nil
             else {
                 throw BridgeProtocolError.invalidSchema
             }
@@ -371,6 +405,21 @@ public enum BridgeMessageCodec {
             object["faviconDataUrl"] = faviconDataURL
         }
         return object
+    }
+
+    private static func validatedPNGData(from dataURL: String) -> Data? {
+        let prefix = "data:image/png;base64,"
+        guard dataURL.hasPrefix(prefix),
+              let data = Data(
+                base64Encoded: String(dataURL.dropFirst(prefix.count))
+              ),
+              data.starts(with: [
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+              ])
+        else {
+            return nil
+        }
+        return data
     }
 
     private static func requireKeys(

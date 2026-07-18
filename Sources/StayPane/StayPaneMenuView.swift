@@ -242,34 +242,36 @@ struct StayPaneMenuView: View {
 
             HStack(spacing: 12) {
                 Label(
-                    model.browserBridgeInstalled ? "Bridge registered" : "Bridge not registered",
-                    systemImage: model.browserBridgeInstalled
+                    model.nativeHostRegistered
+                        ? "Native Host registered"
+                        : "Native Host not registered",
+                    systemImage: model.nativeHostRegistered
                         ? "checkmark.circle.fill"
                         : "exclamationmark.circle"
                 )
-                .foregroundStyle(model.browserBridgeInstalled ? .green : .orange)
+                .foregroundStyle(model.nativeHostRegistered ? .green : .orange)
 
                 Label(
-                    model.browserBridgeConnected ? "Connected" : "Disconnected",
-                    systemImage: model.browserBridgeConnected
+                    model.nativeBridgeConnected ? "Connected" : "Disconnected",
+                    systemImage: model.nativeBridgeConnected
                         ? "link.circle.fill"
                         : "link.badge.plus"
                 )
-                .foregroundStyle(model.browserBridgeConnected ? .green : .secondary)
+                .foregroundStyle(model.nativeBridgeConnected ? .green : .secondary)
             }
             .font(.caption.weight(.medium))
 
-            Text("One-time local setup: register the packaged bridge, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
+            Text("One-time local setup: complete Native Host Registration, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             HStack {
                 Button(
-                    model.browserBridgeInstalled
-                        ? "Repair Local Bridge"
-                        : "Register Local Bridge"
+                    model.nativeHostRegistered
+                        ? "Repair Native Host Registration"
+                        : "Register Native Host"
                 ) {
-                    model.installChromeBridge()
+                    model.registerNativeHost()
                 }
                 .buttonStyle(.bordered)
 
@@ -889,7 +891,7 @@ struct StayPaneMenuView: View {
             .font(.caption.weight(.semibold))
             .padding(.leading, 24)
 
-        if !model.browserBridgeConnected {
+        if !model.nativeBridgeConnected {
             Text("Connect the Chrome companion above to choose an individual tab.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

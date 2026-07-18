@@ -1,26 +1,25 @@
 import {
   EXTENSION_ID,
   NATIVE_HOST_NAME,
-  ExtensionTabSnapshot,
-  fitTabsToNativeMessageBudget,
   makeBlockedTabActivation,
   makeEnforcementError,
   makeHello,
   makeTabActivated,
+  makeTabActivationStarted,
   makeTabsSnapshot,
   parseNativeMessage,
 } from "./protocol.js";
+import {
+  TabActivationEnforcement,
+  clearTabActivationEnforcement,
+  loadTabActivationEnforcement,
+  saveTabActivationEnforcement,
+} from "./tab-activation-store.js";
 import { decideTabActivation } from "./tab-policy.js";
+import { collectTabSnapshots } from "./tab-snapshot.js";
 
 const PROFILE_STORAGE_KEY = "stayPaneProfileIdentifier";
-const ENFORCEMENT_STORAGE_KEY = "stayPaneTabEnforcement";
 const FEEDBACK_INTERVAL_MS = 2_000;
-
-type Enforcement = {
-  profileId: string;
-  tabId: number;
-  windowId: number;
-};
 
 let nativePort: chrome.runtime.Port | null = null;
 let connectedProfileIdentifier: string | null = null;
@@ -68,7 +67,7 @@ async function ensureNativeConnection(): Promise<void> {
       if (nativePort === port) {
         nativePort = null;
         connectedProfileIdentifier = null;
-        void clearEnforcement();
+        void stopTabActivationEnforcement();
         scheduleReconnect();
       }
     });
@@ -76,7 +75,7 @@ async function ensureNativeConnection(): Promise<void> {
   } catch {
     nativePort = null;
     connectedProfileIdentifier = null;
-    await clearEnforcement();
+    await stopTabActivationEnforcement();
     scheduleReconnect();
   }
 }
@@ -117,7 +116,7 @@ async function handleNativeMessage(
         await beginEnforcement(message);
         break;
       case "endEnforcement":
-        await clearEnforcement();
+        await stopTabActivationEnforcement();
         break;
     }
   } catch {
@@ -125,23 +124,38 @@ async function handleNativeMessage(
   }
 }
 
-async function beginEnforcement(enforcement: Enforcement): Promise<void> {
+async function beginEnforcement(
+  enforcement: TabActivationEnforcement,
+): Promise<void> {
+  let tab: chrome.tabs.Tab;
   try {
-    const tab = await chrome.tabs.get(enforcement.tabId);
-    if (
-      tab.incognito ||
-      tab.windowId !== enforcement.windowId ||
-      tab.id !== enforcement.tabId
-    ) {
-      sendEnforcementError(enforcement.profileId, "targetMissing");
-      return;
-    }
-    await chrome.storage.session.set({
-      [ENFORCEMENT_STORAGE_KEY]: enforcement,
-    });
-    await activateAllowedTab(enforcement);
+    tab = await chrome.tabs.get(enforcement.tabId);
   } catch {
     sendEnforcementError(enforcement.profileId, "targetMissing");
+    return;
+  }
+  if (
+    tab.incognito ||
+    tab.windowId !== enforcement.windowId ||
+    tab.id !== enforcement.tabId
+  ) {
+    sendEnforcementError(enforcement.profileId, "targetMissing");
+    return;
+  }
+
+  try {
+    await saveTabActivationEnforcement(enforcement);
+    await activateAllowedTab(enforcement);
+    nativePort?.postMessage(
+      makeTabActivationStarted(
+        enforcement.profileId,
+        enforcement.tabId,
+        enforcement.windowId,
+      ),
+    );
+  } catch {
+    await stopTabActivationEnforcement();
+    sendEnforcementError(enforcement.profileId, "activationFailed");
   }
 }
 
@@ -157,7 +171,7 @@ async function handleTabActivated(
     );
   }
 
-  const enforcement = await loadEnforcement();
+  const enforcement = await loadTabActivationEnforcement();
   if (enforcement === null) {
     return;
   }
@@ -194,7 +208,7 @@ async function handleChromeWindowFocused(windowId: number): Promise<void> {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
     return;
   }
-  const enforcement = await loadEnforcement();
+  const enforcement = await loadTabActivationEnforcement();
   if (enforcement === null || windowId === enforcement.windowId) {
     return;
   }
@@ -204,16 +218,18 @@ async function handleChromeWindowFocused(windowId: number): Promise<void> {
   }
 }
 
-async function activateAllowedTab(enforcement: Enforcement): Promise<void> {
+async function activateAllowedTab(
+  enforcement: TabActivationEnforcement,
+): Promise<void> {
   await chrome.tabs.update(enforcement.tabId, { active: true });
   await chrome.windows.update(enforcement.windowId, { focused: true });
 }
 
 async function handleRemovedTab(tabId: number): Promise<void> {
-  const enforcement = await loadEnforcement();
+  const enforcement = await loadTabActivationEnforcement();
   if (enforcement?.tabId === tabId) {
     sendEnforcementError(enforcement.profileId, "targetMissing");
-    await clearEnforcement();
+    await stopTabActivationEnforcement();
   }
 }
 
@@ -232,64 +248,12 @@ async function publishTabs(): Promise<void> {
   if (nativePort === null || profileIdentifier === null) {
     return;
   }
-  const tabs = await chrome.tabs.query({});
-  const snapshots = await Promise.all(tabs.map(makeTabSnapshot));
-  const eligibleTabs = snapshots.filter(
-    (snapshot): snapshot is ExtensionTabSnapshot => snapshot !== null,
-  );
   nativePort.postMessage(
     makeTabsSnapshot(
       profileIdentifier,
-      fitTabsToNativeMessageBudget(profileIdentifier, eligibleTabs),
+      await collectTabSnapshots(profileIdentifier),
     ),
   );
-}
-
-async function makeTabSnapshot(
-  tab: chrome.tabs.Tab,
-): Promise<ExtensionTabSnapshot | null> {
-  if (
-    tab.id === undefined ||
-    tab.id < 0 ||
-    tab.windowId < 0 ||
-    tab.url === undefined ||
-    tab.url.length === 0
-  ) {
-    return null;
-  }
-  const title = boundedUtf8(tab.title ?? tab.url, 2_048);
-  const url = boundedUtf8(tab.url, 8_192);
-  const faviconDataUrl = await loadFaviconDataURL(tab.url);
-  return {
-    tabId: tab.id,
-    windowId: tab.windowId,
-    title,
-    url,
-    ...(faviconDataUrl === null ? {} : { faviconDataUrl }),
-    active: tab.active,
-    incognito: tab.incognito,
-  };
-}
-
-async function loadFaviconDataURL(pageURL: string): Promise<string | null> {
-  try {
-    const faviconURL = new URL(chrome.runtime.getURL("/_favicon/"));
-    faviconURL.searchParams.set("pageUrl", pageURL);
-    faviconURL.searchParams.set("size", "32");
-    const response = await fetch(faviconURL);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (!response.ok || bytes.length === 0 || bytes.length > 48_000) {
-      return null;
-    }
-    let binary = "";
-    for (let offset = 0; offset < bytes.length; offset += 8_192) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192));
-    }
-    const value = `data:image/png;base64,${btoa(binary)}`;
-    return new TextEncoder().encode(value).length <= 65_536 ? value : null;
-  } catch {
-    return null;
-  }
 }
 
 async function loadProfileIdentifier(): Promise<string> {
@@ -307,31 +271,9 @@ async function loadProfileIdentifier(): Promise<string> {
   return created;
 }
 
-async function loadEnforcement(): Promise<Enforcement | null> {
-  const stored = await chrome.storage.session.get(ENFORCEMENT_STORAGE_KEY);
-  const candidate = stored[ENFORCEMENT_STORAGE_KEY];
-  if (typeof candidate !== "object" || candidate === null) {
-    return null;
-  }
-  const value = candidate as Partial<Enforcement>;
-  if (
-    typeof value.profileId !== "string" ||
-    new TextEncoder().encode(value.profileId).length > 128 ||
-    !/^[A-Za-z0-9_-]+$/.test(value.profileId) ||
-    !Number.isSafeInteger(value.tabId) ||
-    (value.tabId as number) < 0 ||
-    !Number.isSafeInteger(value.windowId) ||
-    (value.windowId as number) < 0
-  ) {
-    await clearEnforcement();
-    return null;
-  }
-  return value as Enforcement;
-}
-
-async function clearEnforcement(): Promise<void> {
+async function stopTabActivationEnforcement(): Promise<void> {
   lastFeedbackAt = null;
-  await chrome.storage.session.remove(ENFORCEMENT_STORAGE_KEY);
+  await clearTabActivationEnforcement();
   await chrome.action.setBadgeText({ text: "" });
 }
 
@@ -350,20 +292,6 @@ function showBlockedFeedback(): void {
   }, 1_200);
 }
 
-function boundedUtf8(value: string, maximumBytes: number): string {
-  if (new TextEncoder().encode(value).length <= maximumBytes) {
-    return value;
-  }
-  let result = value;
-  while (
-    result.length > 1 &&
-    new TextEncoder().encode(result).length > maximumBytes
-  ) {
-    result = result.slice(0, Math.floor(result.length * 0.9));
-  }
-  return result.length === 0 ? "Untitled" : result;
-}
-
 if (chrome.runtime.id !== EXTENSION_ID) {
-  void clearEnforcement();
+  void stopTabActivationEnforcement();
 }
