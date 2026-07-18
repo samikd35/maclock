@@ -27,40 +27,82 @@ public struct SessionDuration: Equatable, Hashable, Codable, Sendable {
 public struct ApplicationTarget: Equatable, Hashable, Sendable {
     public let displayName: String
     public let bundleIdentifier: String
-    public let processIdentifier: Int32
+    public let processIdentifier: Int32?
+    public let applicationURL: URL?
 
-    public init(displayName: String, bundleIdentifier: String, processIdentifier: Int32) {
+    public init(
+        displayName: String,
+        bundleIdentifier: String,
+        processIdentifier: Int32? = nil,
+        applicationURL: URL? = nil
+    ) {
         self.displayName = displayName
         self.bundleIdentifier = bundleIdentifier
         self.processIdentifier = processIdentifier
+        self.applicationURL = applicationURL
+    }
+}
+
+public enum ApplicationActivationDecision: Equatable, Sendable {
+    case allow
+    case block(refocusBundleIdentifier: String?)
+}
+
+public struct ApplicationAllowlistPolicy: Equatable, Sendable {
+    private let allowedBundleIdentifiers: Set<String>
+    private let fallbackBundleIdentifier: String?
+    private var lastActivatedAllowedBundleIdentifier: String?
+
+    public init(targets: [ApplicationTarget]) {
+        allowedBundleIdentifiers = Set(targets.map(\.bundleIdentifier))
+        fallbackBundleIdentifier = targets.first?.bundleIdentifier
+    }
+
+    public func allowsApplication(bundleIdentifier: String) -> Bool {
+        allowedBundleIdentifiers.contains(bundleIdentifier)
+    }
+
+    public mutating func handleActivation(
+        bundleIdentifier: String
+    ) -> ApplicationActivationDecision {
+        guard allowsApplication(bundleIdentifier: bundleIdentifier) else {
+            return .block(
+                refocusBundleIdentifier: lastActivatedAllowedBundleIdentifier
+                    ?? fallbackBundleIdentifier
+            )
+        }
+
+        lastActivatedAllowedBundleIdentifier = bundleIdentifier
+        return .allow
     }
 }
 
 public struct SessionDraft: Equatable, Sendable {
     public let duration: SessionDuration
-    public let target: ApplicationTarget?
+    public let targets: [ApplicationTarget]
 
-    public init(duration: SessionDuration, target: ApplicationTarget?) {
+    public init(duration: SessionDuration, targets: [ApplicationTarget]) {
         self.duration = duration
-        self.target = target
+        self.targets = targets
     }
 }
 
 public struct SessionPlan: Equatable, Sendable {
     public let id: UUID
     public let duration: SessionDuration
-    public let target: ApplicationTarget
+    public let targets: [ApplicationTarget]
     public let preparedAt: Date
 
     public init(
         id: UUID = UUID(),
         duration: SessionDuration,
-        target: ApplicationTarget,
+        targets: [ApplicationTarget],
         preparedAt: Date
     ) {
+        precondition(!targets.isEmpty, "A session plan requires at least one target")
         self.id = id
         self.duration = duration
-        self.target = target
+        self.targets = targets
         self.preparedAt = preparedAt
     }
 }
@@ -205,7 +247,7 @@ public protocol SessionClock: AnyObject {
 
 @MainActor
 public protocol SessionEnforcing: AnyObject {
-    func start(allowing target: ApplicationTarget) throws
+    func start(allowing targets: [ApplicationTarget]) throws
     func stop()
 }
 
@@ -224,7 +266,7 @@ public final class SessionEngine {
     public func beginConfiguration(duration: SessionDuration = .default) {
         switch state {
         case .idle, .completed, .endedEarly:
-            state = .configuring(SessionDraft(duration: duration, target: nil))
+            state = .configuring(SessionDraft(duration: duration, targets: []))
         default:
             break
         }
@@ -232,38 +274,62 @@ public final class SessionEngine {
 
     public func setDuration(_ duration: SessionDuration) throws {
         let draft = try editableDraft()
-        let updatedDraft = SessionDraft(duration: duration, target: draft.target)
-        state = updatedDraft.target == nil ? .configuring(updatedDraft) : .ready(updatedDraft)
+        let updatedDraft = SessionDraft(duration: duration, targets: draft.targets)
+        state = updatedDraft.targets.isEmpty ? .configuring(updatedDraft) : .ready(updatedDraft)
     }
 
     public func select(target: ApplicationTarget) {
         guard case let .configuring(draft) = state else {
             if case let .ready(draft) = state {
-                state = .ready(SessionDraft(duration: draft.duration, target: target))
+                state = .ready(draft.selecting(target))
             }
             return
         }
 
-        state = .ready(SessionDraft(duration: draft.duration, target: target))
+        state = .ready(draft.selecting(target))
     }
 
-    public func clearTarget() {
+    public func clearTargets() {
         guard case let .ready(draft) = state else {
             return
         }
 
-        state = .configuring(SessionDraft(duration: draft.duration, target: nil))
+        state = .configuring(SessionDraft(duration: draft.duration, targets: []))
+    }
+
+    public func deselectTarget(bundleIdentifier: String) {
+        let draft: SessionDraft
+        switch state {
+        case let .configuring(currentDraft), let .ready(currentDraft):
+            draft = currentDraft
+        default:
+            return
+        }
+
+        let updatedDraft = SessionDraft(
+            duration: draft.duration,
+            targets: draft.targets.filter {
+                $0.bundleIdentifier != bundleIdentifier
+            }
+        )
+        state = updatedDraft.targets.isEmpty
+            ? .configuring(updatedDraft)
+            : .ready(updatedDraft)
     }
 
     public func beginStartCountdown(seconds: TimeInterval = 3) throws {
         guard case let .ready(draft) = state else {
             throw SessionEngineError.invalidTransition
         }
-        guard let target = draft.target else {
+        guard !draft.targets.isEmpty else {
             throw SessionEngineError.targetRequired
         }
 
-        let plan = SessionPlan(duration: draft.duration, target: target, preparedAt: clock.now)
+        let plan = SessionPlan(
+            duration: draft.duration,
+            targets: draft.targets,
+            preparedAt: clock.now
+        )
         state = .starting(plan: plan, startsAt: clock.now.addingTimeInterval(seconds))
     }
 
@@ -272,7 +338,7 @@ public final class SessionEngine {
             throw SessionEngineError.invalidTransition
         }
 
-        state = .ready(SessionDraft(duration: plan.duration, target: plan.target))
+        state = .ready(SessionDraft(duration: plan.duration, targets: plan.targets))
     }
 
     public func requestEarlyReset(countdown: TimeInterval = 30) throws {
@@ -352,7 +418,7 @@ public final class SessionEngine {
         switch state {
         case let .starting(plan, startsAt) where clock.now >= startsAt:
             do {
-                try enforcement.start(allowing: plan.target)
+                try enforcement.start(allowing: plan.targets)
                 state = .enforcing(
                     ActiveSession(
                         plan: plan,
@@ -363,7 +429,7 @@ public final class SessionEngine {
                     )
                 )
             } catch {
-                state = .ready(SessionDraft(duration: plan.duration, target: plan.target))
+                state = .ready(SessionDraft(duration: plan.duration, targets: plan.targets))
                 throw error
             }
 
@@ -439,5 +505,19 @@ public final class SessionEngine {
         default:
             throw SessionEngineError.invalidTransition
         }
+    }
+}
+
+private extension SessionDraft {
+    func selecting(_ target: ApplicationTarget) -> SessionDraft {
+        var updatedTargets = targets
+        if let index = updatedTargets.firstIndex(where: {
+            $0.bundleIdentifier == target.bundleIdentifier
+        }) {
+            updatedTargets[index] = target
+        } else {
+            updatedTargets.append(target)
+        }
+        return SessionDraft(duration: duration, targets: updatedTargets)
     }
 }

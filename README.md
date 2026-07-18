@@ -1,6 +1,6 @@
 # StayPane
 
-StayPane is a source-only macOS menu-bar focus timer. You choose one running application and a duration; during the session, StayPane minimizes other app windows and returns focus to the allowed app without quitting anything.
+StayPane is a source-only macOS menu-bar focus timer. You choose one or more running or installed applications and a duration; during the session, StayPane minimizes other app windows and returns focus to the most recently used allowed app without quitting anything.
 
 Ticket 01 targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Screen Recording permission is not required.
 
@@ -24,6 +24,6 @@ make test
 
 ## Current scope
 
-The first vertical slice supports one allowed running application and all of that application's windows. Browser tab restrictions and multi-app/window targeting belong to later tickets in [`tickets.md`](tickets.md).
+Application sessions support an allowlist of multiple running applications plus closed installed applications selected from their `.app` bundles. An application target is intentionally broad: every current and future window, and all content inside the application, remains available. Exact individual-window and browser-tab targeting belong to later tickets in [`tickets.md`](tickets.md).
 
 During an active session, **End Session Early**, ordinary Quit, and Command-Q all use the same controlled exit: enforcement stays active for a visible 30-second countdown, then a final confirmation is required. Force Quit remains a deliberate bypass outside StayPane's honest self-control boundary.

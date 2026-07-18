@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import StayPaneCore
+import UniformTypeIdentifiers
 
 @MainActor
 final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandling {
@@ -10,7 +11,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     @Published private(set) var state: SessionState = .idle
     @Published private(set) var applications: [RunningApplicationItem] = []
-    @Published var selectedApplicationID: String?
+    @Published private(set) var selectedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
     @Published private(set) var durationValidationMessage: String?
     @Published private(set) var accessibilityAuthorized = false
@@ -30,6 +31,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private var noticeTask: Task<Void, Never>?
     private var timer: Timer?
     private var quitCoordinator = QuitCoordinator()
+    private var addedApplicationIDs: Set<String> = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -77,13 +79,14 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         self.timer = timer
     }
 
-    var selectedApplication: RunningApplicationItem? {
-        applications.first { $0.id == selectedApplicationID }
+    var selectedApplications: [RunningApplicationItem] {
+        applications.filter { selectedApplicationIDs.contains($0.id) }
     }
 
     var canReview: Bool {
         accessibilityGranted
-            && selectedApplication != nil
+            && !selectedApplicationIDs.isEmpty
+            && selectedApplications.allSatisfy(\.isAvailable)
             && SessionDuration(seconds: durationSeconds) != nil
     }
 
@@ -134,31 +137,83 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func refreshApplications() {
-        applications = applicationCatalog.load()
+        let previousApplications = Dictionary(
+            uniqueKeysWithValues: applications.map { ($0.id, $0) }
+        )
+        var refreshedApplications = Dictionary(
+            uniqueKeysWithValues: applicationCatalog.load().map { ($0.id, $0) }
+        )
+        let retainedApplicationIDs = selectedApplicationIDs.union(addedApplicationIDs)
 
-        if let selectedApplicationID,
-           !applications.contains(where: { $0.id == selectedApplicationID })
-        {
-            self.selectedApplicationID = nil
-            engine.clearTarget()
-            synchronizeWithEngine()
+        for id in retainedApplicationIDs where refreshedApplications[id] == nil {
+            guard let previousApplication = previousApplications[id] else {
+                continue
+            }
+
+            if let applicationURL = previousApplication.target.applicationURL,
+               let refreshedApplication = try? applicationCatalog.loadApplication(
+                   at: applicationURL
+               )
+            {
+                refreshedApplications[id] = refreshedApplication
+            } else {
+                refreshedApplications[id] = previousApplication.asUnavailable()
+            }
         }
+
+        applications = refreshedApplications.values.sorted {
+            $0.target.displayName.localizedCaseInsensitiveCompare($1.target.displayName)
+                == .orderedAscending
+        }
+
+        for application in selectedApplications {
+            engine.select(target: application.target)
+        }
+        synchronizeWithEngine()
     }
 
-    func chooseApplication(id: String?) {
-        selectedApplicationID = id
-
-        guard
-            let id,
-            let application = applications.first(where: { $0.id == id })
-        else {
-            engine.clearTarget()
-            synchronizeWithEngine()
+    func setApplication(id: String, isSelected: Bool) {
+        guard let application = applications.first(where: { $0.id == id }) else {
             return
         }
 
-        engine.select(target: application.target)
+        if isSelected {
+            selectedApplicationIDs.insert(id)
+            engine.select(target: application.target)
+        } else {
+            selectedApplicationIDs.remove(id)
+            engine.deselectTarget(bundleIdentifier: application.target.bundleIdentifier)
+        }
         synchronizeWithEngine()
+    }
+
+    func addInstalledApplication() {
+        let panel = NSOpenPanel()
+        panel.title = "Add an Installed Application"
+        panel.message = "Choose an application to allow during this session."
+        panel.prompt = "Add Application"
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+
+        guard panel.runModal() == .OK, let applicationURL = panel.url else {
+            return
+        }
+
+        do {
+            let application = try applicationCatalog.loadApplication(at: applicationURL)
+            addedApplicationIDs.insert(application.id)
+            applications.removeAll { $0.id == application.id }
+            applications.append(application)
+            applications.sort {
+                $0.target.displayName.localizedCaseInsensitiveCompare($1.target.displayName)
+                    == .orderedAscending
+            }
+            setApplication(id: application.id, isSelected: true)
+        } catch {
+            showNotice(error.localizedDescription)
+        }
     }
 
     func updateDuration() {
@@ -215,8 +270,16 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             showNotice("Grant Accessibility access before starting a session.")
             return
         }
-        guard selectedApplication != nil else {
-            showNotice("Choose one running application to allow.")
+        guard !selectedApplications.isEmpty else {
+            showNotice("Choose at least one application to allow.")
+            return
+        }
+        let unavailableApplications = selectedApplications.filter { !$0.isAvailable }
+        guard unavailableApplications.isEmpty else {
+            showNotice(
+                "Remove or reinstall unavailable targets: "
+                    + unavailableApplications.map(\.target.displayName).joined(separator: ", ")
+            )
             return
         }
         guard durationValidationMessage == nil else {
@@ -319,7 +382,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func startAnotherSession() {
         engine.beginConfiguration(duration: currentValidDuration())
-        selectedApplicationID = nil
+        selectedApplicationIDs = []
         isReviewing = false
         quitCoordinator.cancelDeferredQuit()
         synchronizeWithEngine()
@@ -398,7 +461,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func failOpen(after error: Error) {
         engine.reset()
-        selectedApplicationID = nil
+        selectedApplicationIDs = []
         isReviewing = false
         quitCoordinator.cancelDeferredQuit()
         engine.beginConfiguration(duration: currentValidDuration())

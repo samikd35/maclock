@@ -21,21 +21,21 @@ import Testing
         return
     }
     #expect(draft.duration == .default)
-    #expect(draft.target == nil)
+    #expect(draft.targets.isEmpty)
 
     engine.select(target: target)
     guard case let .ready(readyDraft) = engine.state else {
         Issue.record("Expected ready")
         return
     }
-    #expect(readyDraft.target == target)
+    #expect(readyDraft.targets == [target])
 
     try engine.beginStartCountdown()
     guard case let .starting(plan, startsAt) = engine.state else {
         Issue.record("Expected starting")
         return
     }
-    #expect(plan.target == target)
+    #expect(plan.targets == [target])
     #expect(startsAt == clock.now.addingTimeInterval(3))
 
     clock.advance(by: 2)
@@ -130,7 +130,7 @@ import Testing
         Issue.record("Expected ready after cancellation")
         return
     }
-    #expect(draft.target == target)
+    #expect(draft.targets == [target])
     #expect(enforcement.startedTargets.isEmpty)
 }
 
@@ -157,7 +157,7 @@ import Testing
         Issue.record("Expected ready after enforcement failed")
         return
     }
-    #expect(draft.target == target)
+    #expect(draft.targets == [target])
     #expect(enforcement.startedTargets.isEmpty)
     #expect(enforcement.stopCount == 0)
 }
@@ -273,7 +273,7 @@ import Testing
         Issue.record("Expected ended-early")
         return
     }
-    #expect(endedSession.plan.target == target)
+    #expect(endedSession.plan.targets == [target])
     #expect(endedSession.endedAt == clock.now)
     #expect(endedSession.actualFocusDuration == 30)
     #expect(enforcement.stopCount == 1)
@@ -454,6 +454,110 @@ import Testing
 }
 
 @MainActor
+@Test func multipleApplicationTargetsBecomeOneImmutableAllowlist() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 14_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let editor = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 20
+    )
+    let reference = ApplicationTarget(
+        displayName: "Reference",
+        bundleIdentifier: "com.example.reference",
+        processIdentifier: 21
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: editor)
+    engine.select(target: reference)
+
+    guard case let .ready(draft) = engine.state else {
+        Issue.record("Expected ready with a non-empty allowlist")
+        return
+    }
+    #expect(draft.targets == [editor, reference])
+
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+
+    guard case let .enforcing(activeSession) = engine.state else {
+        Issue.record("Expected enforcing")
+        return
+    }
+    #expect(activeSession.plan.targets == [editor, reference])
+    #expect(enforcement.startedAllowlists == [[editor, reference]])
+}
+
+@MainActor
+@Test func selectedApplicationsCanBeIndividuallyRemovedBeforeStarting() {
+    let engine = SessionEngine(
+        clock: FakeClock(now: Date(timeIntervalSince1970: 15_000)),
+        enforcement: FakeEnforcement()
+    )
+    let editor = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor"
+    )
+    let reference = ApplicationTarget(
+        displayName: "Reference",
+        bundleIdentifier: "com.example.reference"
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: editor)
+    engine.select(target: reference)
+    engine.deselectTarget(bundleIdentifier: editor.bundleIdentifier)
+
+    guard case let .ready(draft) = engine.state else {
+        Issue.record("One remaining target should keep the draft ready")
+        return
+    }
+    #expect(draft.targets == [reference])
+
+    engine.deselectTarget(bundleIdentifier: reference.bundleIdentifier)
+    guard case let .configuring(emptyDraft) = engine.state else {
+        Issue.record("Removing the final target should return to configuring")
+        return
+    }
+    #expect(emptyDraft.targets.isEmpty)
+}
+
+@MainActor
+@Test func disappearingTargetAbortsEnforcementAndPreservesTheReviewedAllowlist() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 16_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let editor = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor"
+    )
+    let reference = ApplicationTarget(
+        displayName: "Reference",
+        bundleIdentifier: "com.example.reference"
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: editor)
+    engine.select(target: reference)
+    try engine.beginStartCountdown(seconds: 3)
+    enforcement.startError = .targetUnavailable
+    clock.advance(by: 3)
+
+    #expect(throws: FakeEnforcementError.targetUnavailable) {
+        try engine.advance()
+    }
+
+    guard case let .ready(draft) = engine.state else {
+        Issue.record("A failed preflight should return to the reviewed draft")
+        return
+    }
+    #expect(draft.targets == [editor, reference])
+    #expect(enforcement.startedAllowlists.isEmpty)
+}
+
+@MainActor
 private final class FakeClock: SessionClock {
     var now: Date
     var continuousNow: TimeInterval = 0
@@ -480,14 +584,16 @@ private final class FakeClock: SessionClock {
 @MainActor
 private final class FakeEnforcement: SessionEnforcing {
     var startedTargets: [ApplicationTarget] = []
+    var startedAllowlists: [[ApplicationTarget]] = []
     var stopCount = 0
     var startError: FakeEnforcementError?
 
-    func start(allowing target: ApplicationTarget) throws {
+    func start(allowing targets: [ApplicationTarget]) throws {
         if let startError {
             throw startError
         }
-        startedTargets.append(target)
+        startedAllowlists.append(targets)
+        startedTargets.append(contentsOf: targets)
     }
 
     func stop() {
@@ -497,4 +603,5 @@ private final class FakeEnforcement: SessionEnforcing {
 
 private enum FakeEnforcementError: Error {
     case permissionDenied
+    case targetUnavailable
 }

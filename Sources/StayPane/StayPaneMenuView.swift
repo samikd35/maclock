@@ -123,7 +123,7 @@ struct StayPaneMenuView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Allowed application")
+                    Text("Allowed applications")
                         .font(.headline)
                     Spacer()
                     Button {
@@ -135,28 +135,60 @@ struct StayPaneMenuView: View {
                     .help("Refresh running applications")
                 }
 
-                Picker(
-                    "Application",
-                    selection: Binding(
-                        get: { model.selectedApplicationID },
-                        set: { model.chooseApplication(id: $0) }
-                    )
-                ) {
-                    Text("Choose a running application…")
-                        .tag(String?.none)
-                    ForEach(model.applications) { application in
-                        HStack {
-                            Image(nsImage: application.icon)
-                            Text(application.target.displayName)
+                if model.applications.isEmpty {
+                    Text("No running applications found. Add an installed application instead.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(model.applications, id: \.id) { application in
+                            Toggle(
+                                isOn: Binding(
+                                    get: {
+                                        model.selectedApplicationIDs.contains(application.id)
+                                    },
+                                    set: {
+                                        model.setApplication(
+                                            id: application.id,
+                                            isSelected: $0
+                                        )
+                                    }
+                                )
+                            ) {
+                                HStack(spacing: 8) {
+                                    Image(nsImage: application.icon)
+                                        .resizable()
+                                        .frame(width: 22, height: 22)
+                                    Text(application.target.displayName)
+                                    Spacer()
+                                    Text(applicationStatus(application))
+                                        .font(.caption2)
+                                        .foregroundStyle(
+                                            application.isAvailable
+                                                ? Color.secondary
+                                                : Color.red
+                                        )
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                            .disabled(
+                                !application.isAvailable
+                                    && !model.selectedApplicationIDs.contains(application.id)
+                            )
                         }
-                        .tag(Optional(application.id))
                     }
                 }
-                .labelsHidden()
 
-                Text("All windows belonging to the selected app are allowed for this first version.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button {
+                    model.addInstalledApplication()
+                } label: {
+                    Label("Add Installed Application…", systemImage: "plus.app")
+                }
+                .buttonStyle(.bordered)
+
+                if !model.selectedApplicationIDs.isEmpty {
+                    broadApplicationWarning
+                }
             }
 
             Button("Review session") {
@@ -202,14 +234,21 @@ struct StayPaneMenuView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Review your session")
                 .font(.title2.weight(.semibold))
-            Text("Once the countdown finishes, the allowed app and duration stay locked until the session ends.")
+            Text("Once the countdown finishes, the application allowlist and duration stay locked until the session ends.")
                 .foregroundStyle(.secondary)
 
-            reviewRow(
-                title: "Allowed app",
-                value: model.selectedApplication?.target.displayName ?? "Not selected",
-                systemImage: "macwindow"
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Application targets")
+                    .font(.headline)
+                ForEach(model.selectedApplications) { application in
+                    reviewRow(
+                        title: application.isRunning ? "Running application" : "Installed application",
+                        value: application.target.displayName,
+                        systemImage: "macwindow"
+                    )
+                }
+            }
+            broadApplicationWarning
             reviewRow(
                 title: "Duration",
                 value: model.formattedDuration,
@@ -241,7 +280,7 @@ struct StayPaneMenuView: View {
             Text("\(model.countdownNumber)")
                 .font(.system(size: 72, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
-            Text("Only \(plan.target.displayName) will remain available for \(model.formattedDuration).")
+            Text("Only \(applicationNames(plan.targets)) will remain available for \(model.formattedDuration).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Cancel countdown") {
@@ -263,12 +302,14 @@ struct StayPaneMenuView: View {
                 .font(.system(size: 52, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
 
-            VStack(spacing: 4) {
-                Text("Allowed application")
+            VStack(spacing: 6) {
+                Text("Allowed applications")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(activeSession.plan.target.displayName)
-                    .font(.title3.weight(.semibold))
+                ForEach(activeSession.plan.targets, id: \.bundleIdentifier) { target in
+                    Text(target.displayName)
+                        .font(.title3.weight(.semibold))
+                }
             }
 
             Text("Other app windows are minimized. If you activate one, StayPane returns focus here without quitting anything.")
@@ -320,7 +361,7 @@ struct StayPaneMenuView: View {
                     .contentTransition(.numericText())
                 Text("seconds until final confirmation")
                     .foregroundStyle(.secondary)
-                Text("\(pendingReset.activeSession.plan.target.displayName) remains the only allowed application. The focus timer is still running.")
+                Text("The original allowlist—\(applicationNames(pendingReset.activeSession.plan.targets))—remains enforced. The focus timer is still running.")
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -347,7 +388,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.green)
             Text("Session complete")
                 .font(.title2.weight(.semibold))
-            Text("You focused on \(completedSession.plan.target.displayName) for \(StayPaneModel.formatPreset(seconds: completedSession.plan.duration.seconds)).")
+            Text("You focused with \(applicationNames(completedSession.plan.targets)) for \(StayPaneModel.formatPreset(seconds: completedSession.plan.duration.seconds)).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Text("Only windows changed by StayPane were restored.")
@@ -390,6 +431,40 @@ struct StayPaneMenuView: View {
             .font(.caption2)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
+    }
+
+    private var broadApplicationWarning: some View {
+        Label(
+            "Application targets are broad. Every existing and future window—and all content inside each selected application—is allowed during the session.",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.orange)
+        .padding(10)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel(
+            "Broad application access warning: all current and future windows and content in each selected application are allowed."
+        )
+    }
+
+    private func applicationStatus(_ application: RunningApplicationItem) -> String {
+        if application.isRunning {
+            return "Running"
+        }
+        return application.isAvailable ? "Installed" : "Unavailable"
+    }
+
+    private func applicationNames(_ targets: [ApplicationTarget]) -> String {
+        let names = targets.map(\.displayName)
+        if names.count <= 1 {
+            return names.first ?? "your selected applications"
+        }
+        if names.count == 2 {
+            return names.joined(separator: " and ")
+        }
+        return names.dropLast().joined(separator: ", ")
+            + ", and "
+            + (names.last ?? "")
     }
 
     private func reviewRow(title: String, value: String, systemImage: String) -> some View {
