@@ -10,7 +10,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     static let accessibilityIntroKey = "hasSeenAccessibilityIntro"
 
     @Published private(set) var state: SessionState = .idle
-    @Published private(set) var applications: [RunningApplicationItem] = []
+    @Published private(set) var applications: [ApplicationCatalogItem] = []
     @Published private(set) var selectedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
     @Published private(set) var durationValidationMessage: String?
@@ -24,7 +24,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private let defaults: UserDefaults
     private let permissionClient: AccessibilityPermissionClient
-    private let applicationCatalog: RunningApplicationCatalog
+    private let applicationCatalog: ApplicationCatalog
     private let enforcement: ApplicationEnforcementController
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
@@ -36,8 +36,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         permissionClient = AccessibilityPermissionClient()
-        applicationCatalog = RunningApplicationCatalog()
-        enforcement = ApplicationEnforcementController(permissionClient: permissionClient)
+        applicationCatalog = ApplicationCatalog()
+        enforcement = ApplicationEnforcementController(
+            permissionClient: permissionClient,
+            availabilityResolver: applicationCatalog
+        )
         engine = SessionEngine(clock: SystemSessionClock(), enforcement: enforcement)
 
         let storedDuration = defaults.integer(forKey: Self.lastDurationKey)
@@ -79,7 +82,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         self.timer = timer
     }
 
-    var selectedApplications: [RunningApplicationItem] {
+    var selectedApplications: [ApplicationCatalogItem] {
         applications.filter { selectedApplicationIDs.contains($0.id) }
     }
 
@@ -150,15 +153,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 continue
             }
 
-            if let applicationURL = previousApplication.target.applicationURL,
-               let refreshedApplication = try? applicationCatalog.loadApplication(
-                   at: applicationURL
-               )
-            {
-                refreshedApplications[id] = refreshedApplication
-            } else {
-                refreshedApplications[id] = previousApplication.asUnavailable()
-            }
+            refreshedApplications[id] = applicationCatalog.refresh(previousApplication)
         }
 
         applications = refreshedApplications.values.sorted {
@@ -265,6 +260,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     func beginReview() {
         refreshAccessibilityStatus()
         updateDuration()
+        refreshApplications()
 
         guard accessibilityGranted else {
             showNotice("Grant Accessibility access before starting a session.")
@@ -400,6 +396,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             try engine.advance()
         } catch {
             isReviewing = false
+            refreshApplications()
             showNotice(error.localizedDescription)
         }
         synchronizeWithEngine()

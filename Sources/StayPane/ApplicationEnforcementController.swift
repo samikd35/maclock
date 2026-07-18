@@ -3,7 +3,7 @@ import ApplicationServices
 import StayPaneCore
 import StayPanePlatform
 
-enum ApplicationEnforcementError: LocalizedError {
+enum ApplicationEnforcementError: LocalizedError, Equatable {
     case accessibilityPermissionMissing
     case windowControlUnavailable(String)
     case allowedApplicationsUnavailable([String])
@@ -35,6 +35,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     }
 
     private let permissionClient: AccessibilityPermissionClient
+    private let availabilityResolver: any ApplicationAvailabilityResolving
     private let notificationCenter: NotificationCenter
     private let windowOperator: any AccessibilityWindowOperating
     private let restorationTracker: WindowRestorationTracker
@@ -45,10 +46,12 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
     init(
         permissionClient: AccessibilityPermissionClient,
+        availabilityResolver: any ApplicationAvailabilityResolving,
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator()
     ) {
         self.permissionClient = permissionClient
+        self.availabilityResolver = availabilityResolver
         self.notificationCenter = notificationCenter
         self.windowOperator = windowOperator
         restorationTracker = WindowRestorationTracker(operatorClient: windowOperator)
@@ -56,14 +59,14 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     }
 
     func start(allowing targets: [ApplicationTarget]) throws {
-        guard permissionClient.isGranted, permissionClient.verifyWindowControl() else {
-            throw ApplicationEnforcementError.accessibilityPermissionMissing
-        }
-        let unavailableTargets = targets.filter { !isAvailable($0) }
+        let unavailableTargets = targets.filter { !availabilityResolver.isAvailable($0) }
         guard unavailableTargets.isEmpty else {
             throw ApplicationEnforcementError.allowedApplicationsUnavailable(
                 unavailableTargets.map(\.displayName)
             )
+        }
+        guard permissionClient.isGranted, permissionClient.verifyWindowControl() else {
+            throw ApplicationEnforcementError.accessibilityPermissionMissing
         }
         if restorationTracker.pendingCount > 0 {
             let outcome = restorationTracker.restorePendingWindows()
@@ -232,26 +235,6 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                 throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
             }
         }
-    }
-
-    private func isAvailable(_ target: ApplicationTarget) -> Bool {
-        if !NSRunningApplication.runningApplications(
-            withBundleIdentifier: target.bundleIdentifier
-        ).filter({ !$0.isTerminated }).isEmpty {
-            return true
-        }
-
-        if let applicationURL = target.applicationURL,
-           FileManager.default.fileExists(atPath: applicationURL.path)
-        {
-            return true
-        }
-
-        return NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: target.bundleIdentifier
-        ).map {
-            FileManager.default.fileExists(atPath: $0.path)
-        } ?? false
     }
 
     private func activateInitialAllowedApplicationIfRunning() {

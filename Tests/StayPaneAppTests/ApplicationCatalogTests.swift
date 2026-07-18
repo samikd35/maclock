@@ -30,10 +30,17 @@ import Testing
         to: contentsURL.appendingPathComponent("Info.plist")
     )
 
-    let item = try RunningApplicationCatalog().loadApplication(at: applicationURL)
+    let catalog = ApplicationCatalog()
+    let item = try catalog.loadApplication(at: applicationURL)
 
     #expect(item.target.displayName == "Research")
     #expect(item.target.bundleIdentifier == "com.example.research")
     #expect(item.target.processIdentifier == nil)
     #expect(item.target.applicationURL == applicationURL.standardizedFileURL)
+    #expect(item.availability == .installed)
+
+    try fileManager.removeItem(at: applicationURL)
+    let unavailableItem = catalog.refresh(item)
+    #expect(unavailableItem.availability == .unavailable)
+    #expect(!catalog.isAvailable(item.target))
 }

@@ -447,7 +447,7 @@ struct StayPaneMenuView: View {
         )
     }
 
-    private func applicationStatus(_ application: RunningApplicationItem) -> String {
+    private func applicationStatus(_ application: ApplicationCatalogItem) -> String {
         if application.isRunning {
             return "Running"
         }
