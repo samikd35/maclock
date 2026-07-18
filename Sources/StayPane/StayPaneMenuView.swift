@@ -78,6 +78,8 @@ struct StayPaneMenuView: View {
                 setupView
             case let .starting(plan, _):
                 countdownView(plan: plan)
+            case let .recovering(recoveringSession):
+                recoveringView(recoveringSession: recoveringSession)
             case let .enforcing(activeSession):
                 enforcingView(activeSession: activeSession)
             case let .resetPending(pendingReset):
@@ -90,6 +92,27 @@ struct StayPaneMenuView: View {
                 interruptedView(interruptedSession: interruptedSession)
             }
         }
+    }
+
+    private func recoveringView(
+        recoveringSession: RecoveringSession
+    ) -> some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Resuming Session")
+                .font(.title2.weight(.semibold))
+            Text("StayPane is verifying the saved Chrome Tab Target before restoring enforcement.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Text(
+                "Fixed end time: \(recoveringSession.activeSession.endsAt.formatted(date: .omitted, time: .shortened))"
+            )
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 35)
     }
 
     private var setupView: some View {

@@ -130,6 +130,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 enforcement.stop()
                 engine.beginConfiguration(duration: initialDuration)
                 startupNotice = nil
+            case .awaitingEnforcement:
+                startupNotice = "StayPane is verifying the Chrome Tab Target before resuming the saved Session."
             case .resumed:
                 recordDiagnostic(.recoveryResumed)
                 startupNotice = "StayPane resumed the unfinished Session from its Fixed End Time."
@@ -863,6 +865,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             selectedTargetIDs = Set(draft.targets.map(\.id))
         case let .starting(plan, _):
             selectedTargetIDs = Set(plan.targets.map(\.id))
+        case let .recovering(recoveringSession):
+            selectedTargetIDs = Set(
+                recoveringSession.activeSession.plan.targets.map(\.id)
+            )
         case let .enforcing(activeSession):
             selectedTargetIDs = Set(activeSession.plan.targets.map(\.id))
         case let .resetPending(pendingReset):
@@ -1089,6 +1095,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             draft.duration.seconds
         case let .starting(plan, _):
             plan.duration.seconds
+        case let .recovering(recoveringSession):
+            recoveringSession.activeSession.plan.duration.seconds
         case let .enforcing(activeSession):
             activeSession.plan.duration.seconds
         case let .resetPending(pendingReset):

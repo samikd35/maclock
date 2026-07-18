@@ -391,11 +391,25 @@ public struct InterruptedSession: Equatable, Sendable {
     }
 }
 
+public struct RecoveringSession: Equatable, Sendable {
+    public let activeSession: ActiveSession
+    public let phase: SessionRecoveryPhase
+
+    public init(
+        activeSession: ActiveSession,
+        phase: SessionRecoveryPhase
+    ) {
+        self.activeSession = activeSession
+        self.phase = phase
+    }
+}
+
 public enum SessionState: Equatable, Sendable {
     case idle
     case configuring(SessionDraft)
     case ready(SessionDraft)
     case starting(plan: SessionPlan, startsAt: Date)
+    case recovering(RecoveringSession)
     case enforcing(ActiveSession)
     case resetPending(ResetPendingSession)
     case completed(CompletedSession)
@@ -701,7 +715,7 @@ public final class SessionEngine {
         switch state {
         case let .starting(plan, startsAt) where clock.now >= startsAt:
             do {
-                guard try enforcement.start(allowing: plan.targets) else {
+                guard try enforcement.start(allowing: plan.targets) == .active else {
                     return
                 }
                 let activeSession = ActiveSession(
@@ -729,6 +743,25 @@ public final class SessionEngine {
                 throw error
             }
 
+        case let .recovering(recoveringSession):
+            if hasCompleted(recoveringSession.activeSession) {
+                try completeRecoveryWhileAwaiting(recoveringSession)
+                return
+            }
+            do {
+                guard try enforcement.resume(
+                    allowing: recoveringSession.activeSession.plan.targets
+                ) == .active else {
+                    return
+                }
+                restoreRecoveredState(recoveringSession)
+            } catch {
+                try interruptFailedRecovery(
+                    recoveringSession,
+                    error: error
+                )
+            }
+
         case let .enforcing(activeSession) where hasCompleted(activeSession):
             try completeNormally(activeSession)
 
@@ -750,6 +783,8 @@ public final class SessionEngine {
     public func reset() {
         if case .starting = state {
             enforcement.stop()
+        } else if case .recovering = state {
+            enforcement.restorePersistedState()
         } else if case .enforcing = state {
             enforcement.stop()
         } else if case .resetPending = state {
@@ -823,53 +858,21 @@ public final class SessionEngine {
             continuousStartedAt: clock.continuousNow - elapsed,
             continuousEndsAt: clock.continuousNow + remaining
         )
+        let recoveringSession = RecoveringSession(
+            activeSession: activeSession,
+            phase: snapshot.phase
+        )
         do {
-            guard try enforcement.resume(allowing: snapshot.plan.targets) else {
-                throw TabActivationEnforcementError.unavailable
+            guard try enforcement.resume(allowing: snapshot.plan.targets)
+                == .active
+            else {
+                state = .recovering(recoveringSession)
+                return .awaitingEnforcement
             }
         } catch {
-            let recoveryError = error
-            state = .interrupted(
-                InterruptedSession(
-                    plan: snapshot.plan,
-                    startedAt: snapshot.startedAt,
-                    interruptedAt: clock.now,
-                    actualFocusDuration: min(
-                        snapshot.plan.duration.timeInterval,
-                        elapsed
-                    ),
-                    reason: .recoveryUnavailable
-                )
-            )
-            recordHistory(
-                SessionHistoryRecord(
-                    startedAt: snapshot.startedAt,
-                    plannedDuration: snapshot.plan.duration,
-                    actualFocusTime: elapsed,
-                    result: .interrupted
-                )
-            )
-            try? protectInterruptedSession()
-            enforcement.restorePersistedState()
-            throw recoveryError
+            try interruptFailedRecovery(recoveringSession, error: error)
         }
-        switch snapshot.phase {
-        case .enforcing:
-            state = .enforcing(activeSession)
-        case let .resetPending(requestedAt, confirmationAvailableAt):
-            state = .resetPending(
-                ResetPendingSession(
-                    activeSession: activeSession,
-                    requestedAt: requestedAt,
-                    confirmationAvailableAt: confirmationAvailableAt,
-                    continuousConfirmationAvailableAt: clock.continuousNow
-                        + max(
-                            0,
-                            confirmationAvailableAt.timeIntervalSince(clock.now)
-                        )
-                )
-            )
-        }
+        restoreRecoveredState(recoveringSession)
         return .resumed
     }
 
@@ -877,6 +880,12 @@ public final class SessionEngine {
         switch state {
         case let .starting(_, startsAt):
             max(0, startsAt.timeIntervalSince(clock.now))
+        case let .recovering(recoveringSession):
+            max(
+                0,
+                recoveringSession.activeSession.continuousEndsAt
+                    - clock.continuousNow
+            )
         case let .enforcing(activeSession):
             max(0, activeSession.continuousEndsAt - clock.continuousNow)
         case let .resetPending(pendingReset):
@@ -922,6 +931,80 @@ public final class SessionEngine {
             CompletedSession(plan: activeSession.plan, completedAt: clock.now)
         )
         recordHistory(for: activeSession, result: .completed)
+    }
+
+    private func restoreRecoveredState(_ recoveringSession: RecoveringSession) {
+        let activeSession = recoveringSession.activeSession
+        switch recoveringSession.phase {
+        case .enforcing:
+            state = .enforcing(activeSession)
+        case let .resetPending(requestedAt, confirmationAvailableAt):
+            state = .resetPending(
+                ResetPendingSession(
+                    activeSession: activeSession,
+                    requestedAt: requestedAt,
+                    confirmationAvailableAt: confirmationAvailableAt,
+                    continuousConfirmationAvailableAt: clock.continuousNow
+                        + max(
+                            0,
+                            confirmationAvailableAt.timeIntervalSince(clock.now)
+                        )
+                )
+            )
+        }
+    }
+
+    private func interruptFailedRecovery(
+        _ recoveringSession: RecoveringSession,
+        error: Error
+    ) throws -> Never {
+        let activeSession = recoveringSession.activeSession
+        let elapsed = min(
+            activeSession.plan.duration.timeInterval,
+            max(0, clock.now.timeIntervalSince(activeSession.startedAt))
+        )
+        state = .interrupted(
+            InterruptedSession(
+                plan: activeSession.plan,
+                startedAt: activeSession.startedAt,
+                interruptedAt: clock.now,
+                actualFocusDuration: elapsed,
+                reason: .recoveryUnavailable
+            )
+        )
+        recordHistory(
+            SessionHistoryRecord(
+                startedAt: activeSession.startedAt,
+                plannedDuration: activeSession.plan.duration,
+                actualFocusTime: elapsed,
+                result: .interrupted
+            )
+        )
+        try? protectInterruptedSession()
+        enforcement.restorePersistedState()
+        throw error
+    }
+
+    private func completeRecoveryWhileAwaiting(
+        _ recoveringSession: RecoveringSession
+    ) throws {
+        try recoveryStore.clear()
+        enforcement.restorePersistedState()
+        let activeSession = recoveringSession.activeSession
+        state = .completed(
+            CompletedSession(
+                plan: activeSession.plan,
+                completedAt: activeSession.endsAt
+            )
+        )
+        recordHistory(
+            SessionHistoryRecord(
+                startedAt: activeSession.startedAt,
+                plannedDuration: activeSession.plan.duration,
+                actualFocusTime: activeSession.plan.duration.timeInterval,
+                result: .completed
+            )
+        )
     }
 
     private func recordHistory(

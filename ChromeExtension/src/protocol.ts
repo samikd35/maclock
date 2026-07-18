@@ -1,3 +1,8 @@
+import {
+  requireChromeIdentifier,
+  requireProfileIdentifier,
+} from "./identifiers.js";
+
 export const PROTOCOL_VERSION = 1 as const;
 export const EXTENSION_ID = "hoofhoedlagpoclhkgnkmejaihaapoke";
 export const NATIVE_HOST_NAME = "com.staypane.native_bridge";
@@ -99,8 +104,8 @@ export function makeTabActivated(
   windowId: number,
 ) {
   requireProfileIdentifier(profileId);
-  requireIdentifier(tabId);
-  requireIdentifier(windowId);
+  requireChromeIdentifier(tabId);
+  requireChromeIdentifier(windowId);
   return {
     version: PROTOCOL_VERSION,
     type: "tabActivated" as const,
@@ -116,8 +121,8 @@ export function makeBlockedTabActivation(
   allowedTabId: number,
 ) {
   requireProfileIdentifier(profileId);
-  requireIdentifier(attemptedTabId);
-  requireIdentifier(allowedTabId);
+  requireChromeIdentifier(attemptedTabId);
+  requireChromeIdentifier(allowedTabId);
   return {
     version: PROTOCOL_VERSION,
     type: "blockedTabActivation" as const,
@@ -133,8 +138,8 @@ export function makeTabActivationStarted(
   windowId: number,
 ) {
   requireProfileIdentifier(profileId);
-  requireIdentifier(tabId);
-  requireIdentifier(windowId);
+  requireChromeIdentifier(tabId);
+  requireChromeIdentifier(windowId);
   return {
     version: PROTOCOL_VERSION,
     type: "tabActivationStarted" as const,
@@ -190,8 +195,8 @@ export function parseNativeMessage(value: unknown): NativeMessage {
         version: PROTOCOL_VERSION,
         type: "beginEnforcement",
         profileId: requireProfileIdentifier(record.profileId),
-        tabId: requireIdentifier(record.tabId),
-        windowId: requireIdentifier(record.windowId),
+        tabId: requireChromeIdentifier(record.tabId),
+        windowId: requireChromeIdentifier(record.windowId),
       };
     case "endEnforcement":
       requireExactKeys(record, ["version", "type", "profileId"]);
@@ -224,25 +229,6 @@ function requireExactKeys(
   ) {
     throw new Error("Unexpected bridge fields");
   }
-}
-
-function requireProfileIdentifier(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    new TextEncoder().encode(value).length > 128 ||
-    !/^[A-Za-z0-9_-]+$/.test(value)
-  ) {
-    throw new Error("Invalid Chrome profile identifier");
-  }
-  return value;
-}
-
-function requireIdentifier(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new Error("Invalid Chrome identifier");
-  }
-  return value as number;
 }
 
 function snapshotByteCount(

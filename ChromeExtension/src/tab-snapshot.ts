@@ -3,11 +3,38 @@ import {
   fitTabsToNativeMessageBudget,
 } from "./protocol.js";
 
+export type FaviconResponse = {
+  ok: boolean;
+  bytes: Uint8Array;
+};
+
+export type TabSnapshotPort = {
+  queryTabs(): Promise<chrome.tabs.Tab[]>;
+  loadFavicon(pageURL: string): Promise<FaviconResponse>;
+};
+
+const chromeTabSnapshotPort: TabSnapshotPort = {
+  queryTabs: async () => chrome.tabs.query({}),
+  loadFavicon: async (pageURL) => {
+    const faviconURL = new URL(chrome.runtime.getURL("/_favicon/"));
+    faviconURL.searchParams.set("pageUrl", pageURL);
+    faviconURL.searchParams.set("size", "32");
+    const response = await fetch(faviconURL);
+    return {
+      ok: response.ok,
+      bytes: new Uint8Array(await response.arrayBuffer()),
+    };
+  },
+};
+
 export async function collectTabSnapshots(
   profileIdentifier: string,
+  port: TabSnapshotPort = chromeTabSnapshotPort,
 ): Promise<ExtensionTabSnapshot[]> {
-  const tabs = await chrome.tabs.query({});
-  const snapshots = await Promise.all(tabs.map(makeTabSnapshot));
+  const tabs = await port.queryTabs();
+  const snapshots = await Promise.all(
+    tabs.map((tab) => makeTabSnapshot(tab, port)),
+  );
   return fitTabsToNativeMessageBudget(
     profileIdentifier,
     snapshots.filter(
@@ -18,6 +45,7 @@ export async function collectTabSnapshots(
 
 async function makeTabSnapshot(
   tab: chrome.tabs.Tab,
+  port: TabSnapshotPort,
 ): Promise<ExtensionTabSnapshot | null> {
   if (
     tab.id === undefined ||
@@ -30,7 +58,7 @@ async function makeTabSnapshot(
   }
   const title = boundedUtf8(tab.title ?? tab.url, 2_048);
   const url = boundedUtf8(tab.url, 8_192);
-  const faviconDataUrl = await loadFaviconDataURL(tab.url);
+  const faviconDataUrl = await loadFaviconDataURL(tab.url, port);
   return {
     tabId: tab.id,
     windowId: tab.windowId,
@@ -42,13 +70,13 @@ async function makeTabSnapshot(
   };
 }
 
-async function loadFaviconDataURL(pageURL: string): Promise<string | null> {
+async function loadFaviconDataURL(
+  pageURL: string,
+  port: TabSnapshotPort,
+): Promise<string | null> {
   try {
-    const faviconURL = new URL(chrome.runtime.getURL("/_favicon/"));
-    faviconURL.searchParams.set("pageUrl", pageURL);
-    faviconURL.searchParams.set("size", "32");
-    const response = await fetch(faviconURL);
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const response = await port.loadFavicon(pageURL);
+    const bytes = response.bytes;
     const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
     if (
       !response.ok ||

@@ -9,6 +9,8 @@ import {
   makeTabsSnapshot,
   parseNativeMessage,
 } from "./protocol.js";
+import { isValidProfileIdentifier } from "./identifiers.js";
+import { NativeCommandQueue } from "./native-command-queue.js";
 import {
   TabActivationEnforcement,
   clearTabActivationEnforcement,
@@ -59,15 +61,18 @@ async function ensureNativeConnection(): Promise<void> {
     const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     nativePort = port;
     connectedProfileIdentifier = null;
+    const commandQueue = new NativeCommandQueue(() => port.disconnect());
     port.onMessage.addListener((message: unknown) => {
-      void handleNativeMessage(port, profileIdentifier, message);
+      commandQueue.enqueue(async () => {
+        await handleNativeMessage(port, profileIdentifier, message);
+      });
     });
     port.onDisconnect.addListener(() => {
       void chrome.runtime.lastError;
       if (nativePort === port) {
         nativePort = null;
         connectedProfileIdentifier = null;
-        void stopTabActivationEnforcement();
+        commandQueue.enqueue(stopTabActivationEnforcement);
         scheduleReconnect();
       }
     });
@@ -95,32 +100,28 @@ async function handleNativeMessage(
   expectedProfileIdentifier: string,
   rawMessage: unknown,
 ): Promise<void> {
-  try {
-    const message = parseNativeMessage(rawMessage);
-    if (message.profileId !== expectedProfileIdentifier) {
-      throw new Error("Chrome profile mismatch");
-    }
-    if (message.type === "helloAck") {
-      connectedProfileIdentifier = message.profileId;
-      return;
-    }
-    if (connectedProfileIdentifier !== message.profileId) {
-      throw new Error("Command received before handshake");
-    }
+  const message = parseNativeMessage(rawMessage);
+  if (message.profileId !== expectedProfileIdentifier) {
+    throw new Error("Chrome profile mismatch");
+  }
+  if (message.type === "helloAck") {
+    connectedProfileIdentifier = message.profileId;
+    return;
+  }
+  if (connectedProfileIdentifier !== message.profileId) {
+    throw new Error("Command received before handshake");
+  }
 
-    switch (message.type) {
-      case "requestTabs":
-        await publishTabs();
-        break;
-      case "beginEnforcement":
-        await beginEnforcement(message);
-        break;
-      case "endEnforcement":
-        await stopTabActivationEnforcement();
-        break;
-    }
-  } catch {
-    port.disconnect();
+  switch (message.type) {
+    case "requestTabs":
+      await publishTabs();
+      break;
+    case "beginEnforcement":
+      await beginEnforcement(message);
+      break;
+    case "endEnforcement":
+      await stopTabActivationEnforcement();
+      break;
   }
 }
 
@@ -260,9 +261,7 @@ async function loadProfileIdentifier(): Promise<string> {
   const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
   const existing = stored[PROFILE_STORAGE_KEY];
   if (
-    typeof existing === "string" &&
-    new TextEncoder().encode(existing).length <= 128 &&
-    /^[A-Za-z0-9_-]+$/.test(existing)
+    isValidProfileIdentifier(existing)
   ) {
     return existing;
   }

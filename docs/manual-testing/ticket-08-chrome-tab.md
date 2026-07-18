@@ -29,6 +29,7 @@ No Apple or Google paid developer account is part of this source-build flow. Reb
 4. Switch rapidly between tabs. Every disallowed activation must still return, while the visible badge/notice remains rate limited rather than flashing for every event.
 5. Complete normally and repeat through the controlled early-reset flow. After enforcement stops, other tabs must remain freely selectable.
 6. During an active Session, disable the extension or quit Chrome. StayPane must interrupt through Fail Open and restore eligible macOS windows rather than claiming enforcement remains active.
+7. Relaunch StayPane during a short tab-restricted Session. StayPane must show **Resuming Session**, wait for the exact tab confirmation, then continue from the original fixed end time. If Chrome or the extension is unavailable, recovery must become Interrupted and restore eligible macOS windows.
 
 ## Locality and automated contracts
 

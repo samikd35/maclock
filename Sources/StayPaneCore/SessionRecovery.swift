@@ -50,6 +50,7 @@ public struct SessionRecoverySnapshot: Codable, Equatable, Sendable {
 
 public enum SessionRecoveryOutcome: Equatable, Sendable {
     case none
+    case awaitingEnforcement
     case resumed
     case completedWhileUnavailable
 }

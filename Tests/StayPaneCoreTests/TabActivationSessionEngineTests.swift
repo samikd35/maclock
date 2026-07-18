@@ -139,6 +139,7 @@ import Testing
     )
     let native = ApplicationAndWindowTestEnforcement()
     let browser = TabActivationTestEnforcement()
+    browser.startResult = .awaitingConfirmation
     let engine = SessionEngine(
         clock: clock,
         enforcement: native,
@@ -146,10 +147,98 @@ import Testing
         recoveryStore: recovery
     )
 
-    #expect(try engine.recover() == .resumed)
+    #expect(try engine.recover() == .awaitingEnforcement)
+    guard case .recovering = engine.state else {
+        Issue.record("Recovery must wait for the extension confirmation.")
+        return
+    }
+    #expect(native.startedTargets.isEmpty)
 
+    browser.startResult = .active
+    try engine.advance()
+
+    guard case .enforcing = engine.state else {
+        Issue.record("Recovery must resume after exact tab confirmation.")
+        return
+    }
     #expect(native.startedTargets == [.application(tab.application)])
     #expect(browser.startedTargets == [tab])
+}
+
+@MainActor
+@Test func failedExtensionConfirmationInterruptsPendingRecovery() throws {
+    let clock = TabTargetTestClock()
+    let tab = makeBrowserTabTarget()
+    let recovery = makeRecoveryStore(clock: clock, tab: tab)
+    let native = ApplicationAndWindowTestEnforcement()
+    let browser = TabActivationTestEnforcement()
+    browser.startResult = .awaitingConfirmation
+    let engine = SessionEngine(
+        clock: clock,
+        enforcement: native,
+        tabActivationEnforcement: browser,
+        recoveryStore: recovery
+    )
+
+    #expect(try engine.recover() == .awaitingEnforcement)
+    browser.startError = .disconnected
+
+    #expect(throws: TabActivationTestError.disconnected) {
+        try engine.advance()
+    }
+    guard case let .interrupted(interruptedSession) = engine.state else {
+        Issue.record("Failed recovery confirmation must Fail Open.")
+        return
+    }
+    #expect(interruptedSession.reason == .recoveryUnavailable)
+    #expect(try recovery.load() == nil)
+    #expect(native.startedTargets.isEmpty)
+}
+
+@MainActor
+@Test func timerCompletionWinsWhileRecoveryAwaitsExtensionConfirmation() throws {
+    let clock = TabTargetTestClock()
+    let tab = makeBrowserTabTarget()
+    let recovery = makeRecoveryStore(clock: clock, tab: tab)
+    let native = ApplicationAndWindowTestEnforcement()
+    let browser = TabActivationTestEnforcement()
+    browser.startResult = .awaitingConfirmation
+    let engine = SessionEngine(
+        clock: clock,
+        enforcement: native,
+        tabActivationEnforcement: browser,
+        recoveryStore: recovery
+    )
+
+    #expect(try engine.recover() == .awaitingEnforcement)
+    clock.advance(by: 60)
+    try engine.advance()
+
+    guard case .completed = engine.state else {
+        Issue.record("The Fixed End Time must complete pending recovery.")
+        return
+    }
+    #expect(try recovery.load() == nil)
+    #expect(native.startedTargets.isEmpty)
+}
+
+@MainActor
+private func makeRecoveryStore(
+    clock: TabTargetTestClock,
+    tab: BrowserTabTarget
+) -> TabTargetTestRecoveryStore {
+    TabTargetTestRecoveryStore(
+        snapshot: SessionRecoverySnapshot(
+            plan: SessionPlan(
+                duration: SessionDuration(seconds: 60)!,
+                targets: [.browserTab(tab)],
+                preparedAt: clock.now
+            ),
+            startedAt: clock.now,
+            endsAt: clock.now.addingTimeInterval(60),
+            phase: .enforcing
+        )
+    )
 }
 
 private func makeBrowserTabTarget(

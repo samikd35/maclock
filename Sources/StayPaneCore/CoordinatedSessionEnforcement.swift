@@ -26,7 +26,9 @@ final class CoordinatedSessionEnforcement {
         )
     }
 
-    func start(allowing targets: [SessionTarget]) throws -> Bool {
+    func start(
+        allowing targets: [SessionTarget]
+    ) throws -> CoordinatedSessionEnforcementResult {
         let tabStartResult: TabActivationStartResult
         do {
             tabStartResult = try tabActivationEnforcement.start(
@@ -41,7 +43,7 @@ final class CoordinatedSessionEnforcement {
         }
         guard tabStartResult == .active else {
             state = .awaitingTabConfirmation
-            return false
+            return .awaitingTabConfirmation
         }
         do {
             try applicationAndWindowEnforcement.start(
@@ -53,15 +55,17 @@ final class CoordinatedSessionEnforcement {
             state = .idle
             throw error
         }
-        return true
+        return .active
     }
 
-    func resume(allowing targets: [SessionTarget]) throws -> Bool {
+    func resume(
+        allowing targets: [SessionTarget]
+    ) throws -> CoordinatedSessionEnforcementResult {
         guard try tabActivationEnforcement.resume(
             allowing: tabTargets(in: targets)
         ) == .active else {
             state = .awaitingTabConfirmation
-            return false
+            return .awaitingTabConfirmation
         }
         do {
             try applicationAndWindowEnforcement.resume(
@@ -73,7 +77,7 @@ final class CoordinatedSessionEnforcement {
             state = .idle
             throw error
         }
-        return true
+        return .active
     }
 
     func refresh() throws {
@@ -127,4 +131,9 @@ final class CoordinatedSessionEnforcement {
         }
         return mappedTargets
     }
+}
+
+enum CoordinatedSessionEnforcementResult: Equatable {
+    case awaitingTabConfirmation
+    case active
 }
