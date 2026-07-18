@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import StayPaneCore
@@ -17,6 +18,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     @Published private(set) var shouldExplainAccessibility = true
     @Published var isReviewing = false
     @Published private(set) var remainingTime: TimeInterval = 0
+    @Published private(set) var earlyResetRemainingTime: TimeInterval = 0
     @Published private(set) var notice: String?
 
     private let defaults: UserDefaults
@@ -27,6 +29,7 @@ final class StayPaneModel: NSObject, ObservableObject {
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
     private var timer: Timer?
+    private var quitAfterEarlyReset = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -96,12 +99,36 @@ final class StayPaneModel: NSObject, ObservableObject {
         max(1, Int(remainingTime.rounded(.up)))
     }
 
+    var earlyResetCountdownNumber: Int {
+        max(0, Int(earlyResetRemainingTime.rounded(.up)))
+    }
+
+    var formattedEarlyResetRemainingTime: String {
+        Self.format(seconds: earlyResetCountdownNumber)
+    }
+
+    var isEarlyResetConfirmationAvailable: Bool {
+        engine.isEarlyResetConfirmationAvailable
+    }
+
+    var isActiveSession: Bool {
+        switch state {
+        case .enforcing, .resetPending:
+            true
+        default:
+            false
+        }
+    }
+
     var menuBarTitle: String {
         if case .enforcing = state {
             if let notice {
                 return "\(notice) · \(formattedRemainingTime)"
             }
             return formattedRemainingTime
+        }
+        if case .resetPending = state {
+            return "Reset \(formattedEarlyResetRemainingTime) · \(formattedRemainingTime)"
         }
         return "StayPane"
     }
@@ -225,10 +252,71 @@ final class StayPaneModel: NSObject, ObservableObject {
         }
     }
 
+    func requestEarlyReset(quitWhenFinished: Bool = false) {
+        if case .resetPending = state {
+            quitAfterEarlyReset = quitAfterEarlyReset || quitWhenFinished
+            return
+        }
+
+        do {
+            try engine.requestEarlyReset()
+            quitAfterEarlyReset = quitWhenFinished
+            synchronizeWithEngine()
+        } catch {
+            showNotice(error.localizedDescription)
+        }
+    }
+
+    func cancelEarlyReset() {
+        do {
+            try engine.cancelEarlyReset()
+            quitAfterEarlyReset = false
+            synchronizeWithEngine()
+        } catch {
+            showNotice(error.localizedDescription)
+        }
+    }
+
+    func declineEarlyResetConfirmation() {
+        do {
+            try engine.declineEarlyResetConfirmation()
+            quitAfterEarlyReset = false
+            synchronizeWithEngine()
+        } catch {
+            showNotice(error.localizedDescription)
+        }
+    }
+
+    func confirmEarlyReset() {
+        do {
+            try engine.confirmEarlyReset()
+            synchronizeWithEngine()
+            terminateIfQuitRequestFinished()
+        } catch {
+            showNotice(error.localizedDescription)
+        }
+    }
+
+    func handleQuitRequest() -> Bool {
+        guard enforcement.pendingRestorationCount == 0 else {
+            showNotice("StayPane is still restoring windows and will quit when restoration finishes.")
+            return false
+        }
+        guard isActiveSession else {
+            prepareToQuit()
+            return true
+        }
+
+        requestEarlyReset(quitWhenFinished: true)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        return false
+    }
+
     func startAnotherSession() {
         engine.beginConfiguration(duration: currentValidDuration())
         selectedApplicationID = nil
         isReviewing = false
+        quitAfterEarlyReset = false
         synchronizeWithEngine()
         refreshApplications()
     }
@@ -247,9 +335,11 @@ final class StayPaneModel: NSObject, ObservableObject {
             showNotice(error.localizedDescription)
         }
         synchronizeWithEngine()
+        terminateIfQuitRequestFinished()
     }
 
     func prepareToQuit() {
+        quitAfterEarlyReset = false
         engine.reset()
         timer?.invalidate()
     }
@@ -290,15 +380,32 @@ final class StayPaneModel: NSObject, ObservableObject {
     private func synchronizeWithEngine() {
         state = engine.state
         remainingTime = engine.remainingTime() ?? 0
+        earlyResetRemainingTime = engine.earlyResetRemainingTime() ?? 0
     }
 
     private func failOpen(after error: Error) {
         engine.reset()
         selectedApplicationID = nil
         isReviewing = false
+        quitAfterEarlyReset = false
         engine.beginConfiguration(duration: currentValidDuration())
         synchronizeWithEngine()
         showNotice("Enforcement stopped safely: \(error.localizedDescription)")
+    }
+
+    private func terminateIfQuitRequestFinished() {
+        guard quitAfterEarlyReset, enforcement.pendingRestorationCount == 0 else {
+            return
+        }
+
+        switch state {
+        case .completed, .endedEarly:
+            quitAfterEarlyReset = false
+            timer?.invalidate()
+            NSApplication.shared.terminate(nil)
+        default:
+            break
+        }
     }
 
     private func durationFromEngine() -> Int {
@@ -309,8 +416,12 @@ final class StayPaneModel: NSObject, ObservableObject {
             plan.duration.seconds
         case let .enforcing(activeSession):
             activeSession.plan.duration.seconds
+        case let .resetPending(pendingReset):
+            pendingReset.activeSession.plan.duration.seconds
         case let .completed(completedSession):
             completedSession.plan.duration.seconds
+        case let .endedEarly(endedSession):
+            endedSession.plan.duration.seconds
         case .idle:
             currentValidDuration().seconds
         }

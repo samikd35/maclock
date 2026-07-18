@@ -163,6 +163,242 @@ import Testing
 }
 
 @MainActor
+@Test func earlyResetCountdownKeepsTheOriginalSessionEnforced() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 5_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Xcode",
+        bundleIdentifier: "com.apple.dt.Xcode",
+        processIdentifier: 11
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    guard case let .enforcing(activeSession) = engine.state else {
+        Issue.record("Expected enforcing before requesting reset")
+        return
+    }
+
+    try engine.requestEarlyReset()
+    guard case let .resetPending(pendingReset) = engine.state else {
+        Issue.record("Expected reset-pending")
+        return
+    }
+    #expect(pendingReset.activeSession == activeSession)
+    #expect(pendingReset.confirmationAvailableAt == clock.now.addingTimeInterval(30))
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 29)
+    try engine.advance()
+    #expect(engine.earlyResetRemainingTime() == 1)
+    #expect(engine.isEarlyResetConfirmationAvailable == false)
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 1)
+    try engine.advance()
+    #expect(engine.isEarlyResetConfirmationAvailable)
+    #expect(enforcement.stopCount == 0)
+    guard case .resetPending = engine.state else {
+        Issue.record("Enforcement should remain reset-pending until confirmation")
+        return
+    }
+}
+
+@MainActor
+@Test func cancelingEarlyResetReturnsToTheUnchangedActiveSession() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 6_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Terminal",
+        bundleIdentifier: "com.apple.Terminal",
+        processIdentifier: 12
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    guard case let .enforcing(originalSession) = engine.state else {
+        Issue.record("Expected enforcing")
+        return
+    }
+
+    try engine.requestEarlyReset()
+    clock.advance(by: 10)
+    try engine.cancelEarlyReset()
+
+    #expect(engine.state == .enforcing(originalSession))
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 50)
+    try engine.advance()
+    guard case .completed = engine.state else {
+        Issue.record("Canceled reset must preserve the original completion time")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
+@Test func confirmingAfterThirtySecondsEndsTheSessionEarly() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 7_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "BBEdit",
+        bundleIdentifier: "com.barebones.bbedit",
+        processIdentifier: 13
+    )
+
+    engine.beginConfiguration()
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    try engine.requestEarlyReset()
+
+    #expect(throws: SessionEngineError.earlyResetConfirmationNotReady) {
+        try engine.confirmEarlyReset()
+    }
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 30)
+    try engine.advance()
+    try engine.confirmEarlyReset()
+
+    guard case let .endedEarly(endedSession) = engine.state else {
+        Issue.record("Expected ended-early")
+        return
+    }
+    #expect(endedSession.plan.target == target)
+    #expect(endedSession.endedAt == clock.now)
+    #expect(endedSession.actualFocusDuration == 30)
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
+@Test func refusingFinalEarlyResetConfirmationKeepsFocusing() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 8_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Nova",
+        bundleIdentifier: "com.panic.Nova",
+        processIdentifier: 14
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    guard case let .enforcing(originalSession) = engine.state else {
+        Issue.record("Expected enforcing")
+        return
+    }
+    try engine.requestEarlyReset()
+    clock.advance(by: 30)
+    try engine.advance()
+
+    try engine.declineEarlyResetConfirmation()
+
+    #expect(engine.state == .enforcing(originalSession))
+    #expect(enforcement.stopCount == 0)
+
+    clock.advance(by: 30)
+    try engine.advance()
+    guard case .completed = engine.state else {
+        Issue.record("Refusing the reset should preserve normal completion")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
+@Test func normalCompletionWinsWhenTimerEndsDuringResetCountdown() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 9_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Preview",
+        bundleIdentifier: "com.apple.Preview",
+        processIdentifier: 15
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 10)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    clock.advance(by: 5)
+    try engine.requestEarlyReset()
+
+    clock.advance(by: 5)
+    try engine.advance()
+
+    guard case .completed = engine.state else {
+        Issue.record("Normal completion must win while reset is pending")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
+@Test func normalCompletionWinsAtTheExactEarlyResetConfirmationBoundary() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 10_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "TextEdit",
+        bundleIdentifier: "com.apple.TextEdit",
+        processIdentifier: 16
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 30)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    try engine.requestEarlyReset()
+
+    clock.advance(by: 30)
+    try engine.confirmEarlyReset()
+
+    guard case .completed = engine.state else {
+        Issue.record("Normal completion must win at an exact reset/timer tie")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
+@Test func cancelCannotReviveASessionWhoseTimerAlreadyEnded() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 11_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Notes",
+        bundleIdentifier: "com.apple.Notes",
+        processIdentifier: 17
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 10)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    try engine.requestEarlyReset()
+    clock.advance(by: 10)
+
+    try engine.cancelEarlyReset()
+
+    guard case .completed = engine.state else {
+        Issue.record("Cancel must not revive an expired session")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
 private final class FakeClock: SessionClock {
     var now: Date
 

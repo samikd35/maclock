@@ -25,3 +25,5 @@ make test
 ## Current scope
 
 The first vertical slice supports one allowed running application and all of that application's windows. Browser tab restrictions and multi-app/window targeting belong to later tickets in [`tickets.md`](tickets.md).
+
+During an active session, **End Session Early**, ordinary Quit, and Command-Q all use the same controlled exit: enforcement stays active for a visible 30-second countdown, then a final confirmation is required. Force Quit remains a deliberate bypass outside StayPane's honest self-control boundary.

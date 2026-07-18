@@ -57,8 +57,12 @@ struct StayPaneMenuView: View {
                 countdownView(plan: plan)
             case let .enforcing(activeSession):
                 enforcingView(activeSession: activeSession)
+            case let .resetPending(pendingReset):
+                resetPendingView(pendingReset: pendingReset)
             case let .completed(completedSession):
                 completedView(completedSession: completedSession)
+            case let .endedEarly(endedSession):
+                endedEarlyView(endedSession: endedSession)
             }
         }
     }
@@ -274,9 +278,66 @@ struct StayPaneMenuView: View {
 
             Text("Session settings remain locked until the timer completes.")
                 .font(.caption.weight(.medium))
+
+            Button("End Session Early…", role: .destructive) {
+                model.requestEarlyReset()
+            }
+            .buttonStyle(.bordered)
+
+            honestBoundaryNote
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
+    }
+
+    private func resetPendingView(pendingReset: ResetPendingSession) -> some View {
+        VStack(spacing: 16) {
+            Label("Early reset requested", systemImage: "hourglass")
+                .font(.headline)
+                .foregroundStyle(.orange)
+
+            if model.isEarlyResetConfirmationAvailable {
+                Text("Final confirmation")
+                    .font(.title2.weight(.semibold))
+                Text("The 30-second waiting period is complete. Enforcement remains active until you make this final choice.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Button("Keep focusing") {
+                        model.declineEarlyResetConfirmation()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("End session now", role: .destructive) {
+                        model.confirmEarlyReset()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                Text("\(model.earlyResetCountdownNumber)")
+                    .font(.system(size: 62, weight: .bold, design: .rounded).monospacedDigit())
+                    .contentTransition(.numericText())
+                Text("seconds until final confirmation")
+                    .foregroundStyle(.secondary)
+                Text("\(pendingReset.activeSession.plan.target.displayName) remains the only allowed application. The focus timer is still running.")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+
+                Button("Cancel early reset") {
+                    model.cancelEarlyReset()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Text("Focus time remaining: \(model.formattedRemainingTime)")
+                .font(.caption.monospacedDigit().weight(.medium))
+
+            honestBoundaryNote
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
     }
 
     private func completedView(completedSession: CompletedSession) -> some View {
@@ -299,6 +360,36 @@ struct StayPaneMenuView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 35)
+    }
+
+    private func endedEarlyView(endedSession: EndedEarlySession) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .font(.system(size: 52))
+                .foregroundStyle(.orange)
+            Text("Session ended early")
+                .font(.title2.weight(.semibold))
+            Text("Outcome: Ended Early")
+                .font(.headline)
+            Text("Focused for \(StayPaneModel.formatPreset(seconds: Int(endedSession.actualFocusDuration.rounded()))).")
+                .foregroundStyle(.secondary)
+            Text("StayPane restored only the windows it changed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Start another session") {
+                model.startAnotherSession()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 35)
+    }
+
+    private var honestBoundaryNote: some View {
+        Text("Force Quit is a deliberate bypass outside StayPane’s honest self-control boundary.")
+            .font(.caption2)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
     }
 
     private func reviewRow(title: String, value: String, systemImage: String) -> some View {
@@ -325,26 +416,22 @@ struct StayPaneMenuView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Spacer()
-            if !isSessionLocked {
-                Button("Quit") {
-                    model.prepareToQuit()
+            Button(model.isActiveSession ? "Quit…" : "Quit") {
+                if model.handleQuitRequest() {
                     NSApplication.shared.terminate(nil)
                 }
-                .buttonStyle(.plain)
             }
+            .buttonStyle(.plain)
+            .help(
+                model.isActiveSession
+                    ? "Quit uses the same 30-second early-reset flow"
+                    : "Quit StayPane"
+            )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
     }
 
-    private var isSessionLocked: Bool {
-        switch model.state {
-        case .starting, .enforcing:
-            true
-        default:
-            false
-        }
-    }
 }
 
 private struct NoticeBanner: View {

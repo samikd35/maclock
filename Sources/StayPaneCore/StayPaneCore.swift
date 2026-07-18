@@ -87,18 +87,56 @@ public struct CompletedSession: Equatable, Sendable {
     }
 }
 
+public struct ResetPendingSession: Equatable, Sendable {
+    public let activeSession: ActiveSession
+    public let requestedAt: Date
+    public let confirmationAvailableAt: Date
+
+    public init(
+        activeSession: ActiveSession,
+        requestedAt: Date,
+        confirmationAvailableAt: Date
+    ) {
+        self.activeSession = activeSession
+        self.requestedAt = requestedAt
+        self.confirmationAvailableAt = confirmationAvailableAt
+    }
+}
+
+public struct EndedEarlySession: Equatable, Sendable {
+    public let plan: SessionPlan
+    public let startedAt: Date
+    public let endedAt: Date
+    public let actualFocusDuration: TimeInterval
+
+    public init(
+        plan: SessionPlan,
+        startedAt: Date,
+        endedAt: Date,
+        actualFocusDuration: TimeInterval
+    ) {
+        self.plan = plan
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.actualFocusDuration = actualFocusDuration
+    }
+}
+
 public enum SessionState: Equatable, Sendable {
     case idle
     case configuring(SessionDraft)
     case ready(SessionDraft)
     case starting(plan: SessionPlan, startsAt: Date)
     case enforcing(ActiveSession)
+    case resetPending(ResetPendingSession)
     case completed(CompletedSession)
+    case endedEarly(EndedEarlySession)
 }
 
 public enum SessionEngineError: Error, Equatable {
     case invalidTransition
     case targetRequired
+    case earlyResetConfirmationNotReady
 }
 
 @MainActor
@@ -126,7 +164,7 @@ public final class SessionEngine {
 
     public func beginConfiguration(duration: SessionDuration = .default) {
         switch state {
-        case .idle, .completed:
+        case .idle, .completed, .endedEarly:
             state = .configuring(SessionDraft(duration: duration, target: nil))
         default:
             break
@@ -178,6 +216,89 @@ public final class SessionEngine {
         state = .ready(SessionDraft(duration: plan.duration, target: plan.target))
     }
 
+    public func requestEarlyReset(countdown: TimeInterval = 30) throws {
+        guard case let .enforcing(activeSession) = state else {
+            throw SessionEngineError.invalidTransition
+        }
+
+        state = .resetPending(
+            ResetPendingSession(
+                activeSession: activeSession,
+                requestedAt: clock.now,
+                confirmationAvailableAt: clock.now.addingTimeInterval(countdown)
+            )
+        )
+    }
+
+    public func cancelEarlyReset() throws {
+        guard case let .resetPending(pendingReset) = state else {
+            throw SessionEngineError.invalidTransition
+        }
+        if clock.now >= pendingReset.activeSession.endsAt {
+            enforcement.stop()
+            state = .completed(
+                CompletedSession(
+                    plan: pendingReset.activeSession.plan,
+                    completedAt: clock.now
+                )
+            )
+            return
+        }
+
+        state = .enforcing(pendingReset.activeSession)
+    }
+
+    public func confirmEarlyReset() throws {
+        guard case let .resetPending(pendingReset) = state else {
+            throw SessionEngineError.invalidTransition
+        }
+        if clock.now >= pendingReset.activeSession.endsAt {
+            enforcement.stop()
+            state = .completed(
+                CompletedSession(
+                    plan: pendingReset.activeSession.plan,
+                    completedAt: clock.now
+                )
+            )
+            return
+        }
+        guard clock.now >= pendingReset.confirmationAvailableAt else {
+            throw SessionEngineError.earlyResetConfirmationNotReady
+        }
+
+        enforcement.stop()
+        let activeSession = pendingReset.activeSession
+        state = .endedEarly(
+            EndedEarlySession(
+                plan: activeSession.plan,
+                startedAt: activeSession.startedAt,
+                endedAt: clock.now,
+                actualFocusDuration: clock.now.timeIntervalSince(activeSession.startedAt)
+            )
+        )
+    }
+
+    public func declineEarlyResetConfirmation() throws {
+        guard case let .resetPending(pendingReset) = state else {
+            throw SessionEngineError.invalidTransition
+        }
+        if clock.now >= pendingReset.activeSession.endsAt {
+            enforcement.stop()
+            state = .completed(
+                CompletedSession(
+                    plan: pendingReset.activeSession.plan,
+                    completedAt: clock.now
+                )
+            )
+            return
+        }
+        guard clock.now >= pendingReset.confirmationAvailableAt else {
+            throw SessionEngineError.earlyResetConfirmationNotReady
+        }
+
+        state = .enforcing(pendingReset.activeSession)
+    }
+
     public func advance() throws {
         switch state {
         case let .starting(plan, startsAt) where clock.now >= startsAt:
@@ -201,6 +322,16 @@ public final class SessionEngine {
                 CompletedSession(plan: activeSession.plan, completedAt: clock.now)
             )
 
+        case let .resetPending(pendingReset)
+            where clock.now >= pendingReset.activeSession.endsAt:
+            enforcement.stop()
+            state = .completed(
+                CompletedSession(
+                    plan: pendingReset.activeSession.plan,
+                    completedAt: clock.now
+                )
+            )
+
         default:
             break
         }
@@ -208,6 +339,8 @@ public final class SessionEngine {
 
     public func reset() {
         if case .enforcing = state {
+            enforcement.stop()
+        } else if case .resetPending = state {
             enforcement.stop()
         }
         state = .idle
@@ -219,9 +352,25 @@ public final class SessionEngine {
             max(0, startsAt.timeIntervalSince(clock.now))
         case let .enforcing(activeSession):
             max(0, activeSession.endsAt.timeIntervalSince(clock.now))
+        case let .resetPending(pendingReset):
+            max(0, pendingReset.activeSession.endsAt.timeIntervalSince(clock.now))
         default:
             nil
         }
+    }
+
+    public func earlyResetRemainingTime() -> TimeInterval? {
+        guard case let .resetPending(pendingReset) = state else {
+            return nil
+        }
+        return max(0, pendingReset.confirmationAvailableAt.timeIntervalSince(clock.now))
+    }
+
+    public var isEarlyResetConfirmationAvailable: Bool {
+        guard case let .resetPending(pendingReset) = state else {
+            return false
+        }
+        return clock.now >= pendingReset.confirmationAvailableAt
     }
 
     private func editableDraft() throws -> SessionDraft {
