@@ -427,6 +427,33 @@ import Testing
 }
 
 @MainActor
+@Test func sessionCompletesAfterSleepWhileEarlyResetIsPending() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 13_000))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let target = ApplicationTarget(
+        displayName: "Freeform",
+        bundleIdentifier: "com.apple.freeform",
+        processIdentifier: 19
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 10)!)
+    engine.select(target: target)
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+    try engine.requestEarlyReset()
+
+    clock.simulateSleep(by: 12)
+    try engine.advance()
+
+    guard case .completed = engine.state else {
+        Issue.record("Focus time must continue while the Mac sleeps")
+        return
+    }
+    #expect(enforcement.stopCount == 1)
+}
+
+@MainActor
 private final class FakeClock: SessionClock {
     var now: Date
     var continuousNow: TimeInterval = 0
@@ -442,6 +469,11 @@ private final class FakeClock: SessionClock {
 
     func adjustWallClock(by seconds: TimeInterval) {
         now = now.addingTimeInterval(seconds)
+    }
+
+    func simulateSleep(by seconds: TimeInterval) {
+        now = now.addingTimeInterval(seconds)
+        continuousNow += seconds
     }
 }
 
