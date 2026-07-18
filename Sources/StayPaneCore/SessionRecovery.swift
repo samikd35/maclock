@@ -58,10 +58,7 @@ public enum SessionRecoveryOutcome: Equatable, Sendable {
 public protocol SessionRecoveryPersisting: AnyObject {
     func load() throws -> SessionRecoverySnapshot?
     func save(_ snapshot: SessionRecoverySnapshot) throws
-    func markInterrupted(
-        at interruptedAt: Date,
-        reason: SessionInterruptionReason
-    ) throws
+    func markInterrupted() throws
     func clear() throws
 }
 
@@ -75,10 +72,7 @@ public final class NoSessionRecoveryStore: SessionRecoveryPersisting {
 
     public func save(_ snapshot: SessionRecoverySnapshot) throws {}
 
-    public func markInterrupted(
-        at interruptedAt: Date,
-        reason: SessionInterruptionReason
-    ) throws {}
+    public func markInterrupted() throws {}
 
     public func clear() throws {}
 }

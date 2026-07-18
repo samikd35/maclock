@@ -28,7 +28,7 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
         case let .exactWindowIdentityUnavailable(windowTitles):
             "These Window Targets do not expose a stable Exact Window Identity: \(windowTitles.joined(separator: ", ")). Choose their Application Targets instead."
         case let .windowRestorationUnavailable(windowTitle):
-            "StayPane cannot persist the Restoration identity for \(windowTitle), so reliable enforcement cannot continue."
+            "StayPane cannot persist the Exact Window Identity required for Restoration of \(windowTitle), so reliable enforcement cannot continue."
         case .windowEnforcementPersistenceUnavailable:
             "StayPane could not load or save the exact-window enforcement state required for reliable Recovery and Restoration."
         }
@@ -646,15 +646,23 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     private func persistWindowEnforcementSnapshot() throws {
         try windowEnforcementStore.save(
             WindowEnforcementSnapshot(
-                allowedWindowReferences: allowedWindowReferences.values.sorted {
-                    $0.windowIdentifier.rawValue.uuidString
-                        < $1.windowIdentifier.rawValue.uuidString
-                },
-                restorationReferences: restorationReferences.values.sorted {
-                    $0.windowIdentifier.rawValue.uuidString
-                        < $1.windowIdentifier.rawValue.uuidString
-                }
+                allowedWindowReferences: sortedExactWindowReferences(
+                    Array(allowedWindowReferences.values)
+                ),
+                restorationReferences: sortedExactWindowReferences(
+                    Array(restorationReferences.values)
+                )
             )
         )
+        windowEnforcementLoadFailed = false
+    }
+
+    private func sortedExactWindowReferences(
+        _ references: [ExactWindowReference]
+    ) -> [ExactWindowReference] {
+        references.sorted {
+            $0.windowIdentifier.rawValue.uuidString
+                < $1.windowIdentifier.rawValue.uuidString
+        }
     }
 }

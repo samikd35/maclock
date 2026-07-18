@@ -80,10 +80,7 @@ import Testing
     )
     try store.save(snapshot)
 
-    try store.markInterrupted(
-        at: Date(timeIntervalSince1970: 2_010),
-        reason: .enforcementUnavailable
-    )
+    try store.markInterrupted()
 
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
     #expect(try store.load() == nil)

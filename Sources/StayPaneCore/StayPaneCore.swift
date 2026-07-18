@@ -739,10 +739,7 @@ public final class SessionEngine {
             )
         )
         do {
-            try protectInterruptedSession(
-                at: clock.now,
-                reason: reason
-            )
+            try protectInterruptedSession()
         } catch {
             enforcement.stop()
             throw error
@@ -789,10 +786,7 @@ public final class SessionEngine {
                     reason: .recoveryUnavailable
                 )
             )
-            try? protectInterruptedSession(
-                at: clock.now,
-                reason: .recoveryUnavailable
-            )
+            try? protectInterruptedSession()
             enforcement.stop()
             throw recoveryError
         }
@@ -866,15 +860,9 @@ public final class SessionEngine {
         )
     }
 
-    private func protectInterruptedSession(
-        at interruptedAt: Date,
-        reason: SessionInterruptionReason
-    ) throws {
+    private func protectInterruptedSession() throws {
         do {
-            try recoveryStore.markInterrupted(
-                at: interruptedAt,
-                reason: reason
-            )
+            try recoveryStore.markInterrupted()
         } catch {
             try recoveryStore.clear()
             return

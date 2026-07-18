@@ -3,14 +3,9 @@ import StayPaneCore
 
 @MainActor
 final class FileSessionRecoveryStore: SessionRecoveryPersisting {
-    private struct InterruptionMarker: Codable {
-        let interruptedAt: Date
-        let reason: SessionInterruptionReason
-    }
-
     private enum StoredRecovery: Codable {
         case active(SessionRecoverySnapshot)
-        case interrupted(InterruptionMarker)
+        case interrupted
     }
 
     private let file: LocalJSONFile<StoredRecovery>
@@ -33,25 +28,11 @@ final class FileSessionRecoveryStore: SessionRecoveryPersisting {
     }
 
     func save(_ snapshot: SessionRecoverySnapshot) throws {
-        try write(.active(snapshot))
+        try file.save(.active(snapshot))
     }
 
-    func markInterrupted(
-        at interruptedAt: Date,
-        reason: SessionInterruptionReason
-    ) throws {
-        try write(
-            .interrupted(
-                InterruptionMarker(
-                    interruptedAt: interruptedAt,
-                    reason: reason
-                )
-            )
-        )
-    }
-
-    private func write(_ storedRecovery: StoredRecovery) throws {
-        try file.save(storedRecovery)
+    func markInterrupted() throws {
+        try file.save(.interrupted)
     }
 
     func clear() throws {

@@ -464,10 +464,7 @@ private final class InMemorySessionRecoveryStore: SessionRecoveryPersisting {
         hasInterruptionMarker = false
     }
 
-    func markInterrupted(
-        at interruptedAt: Date,
-        reason: SessionInterruptionReason
-    ) throws {
+    func markInterrupted() throws {
         snapshot = nil
         hasInterruptionMarker = true
     }
