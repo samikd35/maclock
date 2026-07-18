@@ -15,7 +15,7 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 2. Drag it to another position and, when available, another display. It must remain movable and must not activate blocked content.
 3. Collapse it into the compact pill, then expand it. The remaining time and hide control must remain usable in both forms.
 4. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
-5. Show it, move it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position and collapsed state must be restored. A timer hidden during the prior launch defaults to visible again.
+5. Show it, move it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position and collapsed state must be restored. A Floating Timer hidden during the prior launch defaults to visible again.
 6. Repeat with an allowed application in native full screen. The Floating Timer must remain available as auxiliary native UI without exiting full screen.
 
 ## Global Open-Panel Shortcut

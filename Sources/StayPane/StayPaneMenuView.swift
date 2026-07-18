@@ -258,7 +258,7 @@ struct StayPaneMenuView: View {
                 Button("Open Focus Settings") {
                     if !FocusSettingsOpener.open() {
                         model.showNotice(
-                            "Open System Settings → Focus to silence notifications during a session."
+                            "Open System Settings → Focus to silence notifications during a Session."
                         )
                     }
                 }
@@ -469,7 +469,7 @@ struct StayPaneMenuView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            Text("The floating timer is native, movable, and optional. The menu-bar timer remains visible when it is hidden.")
+            Text("The Floating Timer is native, movable, and optional. The menu-bar countdown remains visible when it is hidden.")
                 .font(.caption2)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
