@@ -13,8 +13,16 @@ let package = Package(
     ],
     targets: [
         .target(name: "StayPaneCore"),
-        .executableTarget(name: "StayPane", dependencies: ["StayPaneCore"]),
-        .testTarget(name: "StayPaneCoreTests", dependencies: ["StayPaneCore"])
+        .target(name: "StayPanePlatform"),
+        .executableTarget(
+            name: "StayPane",
+            dependencies: ["StayPaneCore", "StayPanePlatform"]
+        ),
+        .testTarget(name: "StayPaneCoreTests", dependencies: ["StayPaneCore"]),
+        .testTarget(
+            name: "StayPanePlatformTests",
+            dependencies: ["StayPanePlatform"]
+        )
     ],
     swiftLanguageModes: [.v6]
 )

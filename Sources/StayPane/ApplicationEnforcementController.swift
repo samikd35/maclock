@@ -1,11 +1,13 @@
 import AppKit
 import ApplicationServices
 import StayPaneCore
+import StayPanePlatform
 
 enum ApplicationEnforcementError: LocalizedError {
     case accessibilityPermissionMissing
     case windowControlUnavailable(String)
     case allowedApplicationUnavailable(String)
+    case windowRestorationPending(Int)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +17,8 @@ enum ApplicationEnforcementError: LocalizedError {
             "StayPane could not safely control \(applicationName)."
         case let .allowedApplicationUnavailable(applicationName):
             "\(applicationName) is no longer available."
+        case let .windowRestorationPending(count):
+            "StayPane is still restoring \(count) window(s) from the previous session."
         }
     }
 }
@@ -23,20 +27,30 @@ enum ApplicationEnforcementError: LocalizedError {
 final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     var onBlockedApplication: ((String) -> Void)?
     var onEnforcementFailure: ((Error) -> Void)?
+    var onRestorationFailure: ((Int) -> Void)?
+    var onRestorationRecovered: (() -> Void)?
+
+    var pendingRestorationCount: Int {
+        restorationTracker.pendingCount
+    }
 
     private let permissionClient: AccessibilityPermissionClient
     private let notificationCenter: NotificationCenter
+    private let windowOperator: any AccessibilityWindowOperating
+    private let restorationTracker: WindowRestorationTracker
     private var allowedTarget: ApplicationTarget?
-    private var changedWindows: [AXUIElement] = []
     private var isObserving = false
     private var lastNoticeAt = Date.distantPast
 
     init(
         permissionClient: AccessibilityPermissionClient,
-        notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter
+        notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator()
     ) {
         self.permissionClient = permissionClient
         self.notificationCenter = notificationCenter
+        self.windowOperator = windowOperator
+        restorationTracker = WindowRestorationTracker(operatorClient: windowOperator)
         super.init()
     }
 
@@ -44,9 +58,16 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         guard permissionClient.isGranted, permissionClient.verifyWindowControl() else {
             throw ApplicationEnforcementError.accessibilityPermissionMissing
         }
+        if restorationTracker.pendingCount > 0 {
+            let outcome = restorationTracker.restorePendingWindows()
+            guard outcome.pendingCount == 0 else {
+                throw ApplicationEnforcementError.windowRestorationPending(
+                    outcome.pendingCount
+                )
+            }
+        }
 
         allowedTarget = target
-        changedWindows.removeAll()
         beginObservingActivations()
 
         do {
@@ -58,26 +79,34 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             }
         } catch {
             stop()
+            if pendingRestorationCount > 0 {
+                throw ApplicationEnforcementError.windowRestorationPending(
+                    pendingRestorationCount
+                )
+            }
             throw error
         }
     }
 
     func stop() {
         endObservingActivations()
+        allowedTarget = nil
 
-        for window in changedWindows {
-            guard isWindowMinimized(window) == true else {
-                continue
-            }
-            AXUIElementSetAttributeValue(
-                window,
-                kAXMinimizedAttribute as CFString,
-                kCFBooleanFalse
-            )
+        let outcome = restorationTracker.restorePendingWindows()
+        if outcome.pendingCount > 0 {
+            onRestorationFailure?(outcome.pendingCount)
+        }
+    }
+
+    func retryPendingRestorations() {
+        guard allowedTarget == nil, restorationTracker.pendingCount > 0 else {
+            return
         }
 
-        changedWindows.removeAll()
-        allowedTarget = nil
+        let outcome = restorationTracker.restorePendingWindows()
+        if outcome.pendingCount == 0 {
+            onRestorationRecovered?()
+        }
     }
 
     @objc
@@ -104,7 +133,12 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         } catch {
             NSApplication.shared.activate(ignoringOtherApps: true)
             stop()
-            onEnforcementFailure?(error)
+            let reportedError: Error = pendingRestorationCount > 0
+                ? ApplicationEnforcementError.windowRestorationPending(
+                    pendingRestorationCount
+                )
+                : error
+            onEnforcementFailure?(reportedError)
         }
     }
 
@@ -165,41 +199,29 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         }
 
         for window in windows {
-            guard let isMinimized = isWindowMinimized(window) else {
-                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
-            }
-            guard !isMinimized else {
+            switch windowOperator.minimizedState(of: window) {
+            case .minimized(true):
                 continue
+
+            case .unavailable:
+                continue
+
+            case .failed:
+                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
+
+            case .minimized(false):
+                break
             }
 
-            let minimizeResult = AXUIElementSetAttributeValue(
-                window,
-                kAXMinimizedAttribute as CFString,
-                kCFBooleanTrue
-            )
-
-            guard minimizeResult == .success else {
+            switch windowOperator.setMinimized(true, for: window) {
+            case .success:
+                restorationTracker.recordChangedWindow(window)
+            case .unavailable:
+                continue
+            case .failed:
                 throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
             }
-
-            if !changedWindows.contains(where: { CFEqual($0, window) }) {
-                changedWindows.append(window)
-            }
         }
-    }
-
-    private func isWindowMinimized(_ window: AXUIElement) -> Bool? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            window,
-            kAXMinimizedAttribute as CFString,
-            &value
-        )
-
-        guard result == .success else {
-            return nil
-        }
-        return value as? Bool
     }
 
     private func activateAllowedApplication() -> Bool {

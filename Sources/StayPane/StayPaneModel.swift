@@ -47,6 +47,14 @@ final class StayPaneModel: NSObject, ObservableObject {
         enforcement.onEnforcementFailure = { [weak self] error in
             self?.failOpen(after: error)
         }
+        enforcement.onRestorationFailure = { [weak self] count in
+            self?.showNotice(
+                "\(count) window(s) could not be restored yet. StayPane will keep retrying."
+            )
+        }
+        enforcement.onRestorationRecovered = { [weak self] in
+            self?.showNotice("No pending window restorations remain.")
+        }
 
         engine.beginConfiguration(duration: initialDuration)
         synchronizeWithEngine()
@@ -229,6 +237,7 @@ final class StayPaneModel: NSObject, ObservableObject {
         if Date().timeIntervalSince(lastPermissionCheck) >= 1 {
             lastPermissionCheck = Date()
             refreshAccessibilityStatus(forceVerification: false)
+            enforcement.retryPendingRestorations()
         }
 
         do {
