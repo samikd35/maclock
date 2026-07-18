@@ -7,6 +7,7 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
     case accessibilityPermissionMissing
     case windowControlUnavailable(String)
     case allowedApplicationsUnavailable([String])
+    case allowedWindowsUnavailable([String])
     case windowRestorationPending(Int)
 
     var errorDescription: String? {
@@ -17,6 +18,8 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
             "StayPane could not safely control \(applicationName)."
         case let .allowedApplicationsUnavailable(applicationNames):
             "These allowed applications are no longer installed: \(applicationNames.joined(separator: ", ")). Remove them or install them again before starting."
+        case let .allowedWindowsUnavailable(windowTitles):
+            "These allowed windows closed before the session started: \(windowTitles.joined(separator: ", ")). Choose their reopened windows again."
         case let .windowRestorationPending(count):
             "StayPane is still restoring \(count) window(s) from the previous session."
         }
@@ -36,37 +39,65 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
     private let permissionClient: AccessibilityPermissionClient
     private let availabilityResolver: any ApplicationAvailabilityResolving
+    private let windowCatalog: AccessibilityWindowCatalog
     private let notificationCenter: NotificationCenter
     private let windowOperator: any AccessibilityWindowOperating
     private let restorationTracker: WindowRestorationTracker
-    private var allowedTargets: [ApplicationTarget] = []
-    private var activationPolicy = ApplicationAllowlistPolicy(targets: [])
+    private var allowedTargets: [SessionTarget] = []
+    private var windowPolicy = WindowAllowlistPolicy(targets: [])
     private var isObserving = false
-    private var lastNoticeAt = Date.distantPast
+    private var lastNoticeUptime: TimeInterval = -.infinity
+    private var lastFullScanUptime: TimeInterval = -.infinity
+
+    private static let fullScanInterval: TimeInterval = 0.25
 
     init(
         permissionClient: AccessibilityPermissionClient,
         availabilityResolver: any ApplicationAvailabilityResolving,
+        windowCatalog: AccessibilityWindowCatalog = AccessibilityWindowCatalog(),
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         windowOperator: any AccessibilityWindowOperating = SystemAccessibilityWindowOperator()
     ) {
         self.permissionClient = permissionClient
         self.availabilityResolver = availabilityResolver
+        self.windowCatalog = windowCatalog
         self.notificationCenter = notificationCenter
         self.windowOperator = windowOperator
         restorationTracker = WindowRestorationTracker(operatorClient: windowOperator)
         super.init()
     }
 
-    func start(allowing targets: [ApplicationTarget]) throws {
-        let unavailableTargets = targets.filter { !availabilityResolver.isAvailable($0) }
-        guard unavailableTargets.isEmpty else {
+    func start(allowing targets: [SessionTarget]) throws {
+        let applicationTargets = targets.compactMap { target -> ApplicationTarget? in
+            guard case let .application(application) = target else {
+                return nil
+            }
+            return application
+        }
+        let unavailableApplications = applicationTargets.filter {
+            !availabilityResolver.isAvailable($0)
+        }
+        guard unavailableApplications.isEmpty else {
             throw ApplicationEnforcementError.allowedApplicationsUnavailable(
-                unavailableTargets.map(\.displayName)
+                unavailableApplications.map(\.displayName)
             )
         }
         guard permissionClient.isGranted, permissionClient.verifyWindowControl() else {
             throw ApplicationEnforcementError.accessibilityPermissionMissing
+        }
+
+        let unavailableWindows = targets.compactMap { target -> WindowTarget? in
+            guard case let .window(window) = target,
+                  !windowCatalog.isAvailable(window)
+            else {
+                return nil
+            }
+            return window
+        }
+        guard unavailableWindows.isEmpty else {
+            throw ApplicationEnforcementError.allowedWindowsUnavailable(
+                unavailableWindows.map(\.title)
+            )
         }
         if restorationTracker.pendingCount > 0 {
             let outcome = restorationTracker.restorePendingWindows()
@@ -78,12 +109,12 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         }
 
         allowedTargets = targets
-        activationPolicy = ApplicationAllowlistPolicy(targets: targets)
+        windowPolicy = WindowAllowlistPolicy(targets: targets)
         beginObservingActivations()
 
         do {
-            try minimizeCurrentlyDisallowedApplications()
-            activateInitialAllowedApplicationIfRunning()
+            try enforceCurrentWindows()
+            activateInitialAllowedTarget()
         } catch {
             stop()
             if pendingRestorationCount > 0 {
@@ -95,10 +126,25 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         }
     }
 
+    func refresh() throws {
+        guard !allowedTargets.isEmpty else {
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastFullScanUptime >= Self.fullScanInterval else {
+            return
+        }
+        guard permissionClient.isGranted else {
+            throw ApplicationEnforcementError.accessibilityPermissionMissing
+        }
+        try enforceCurrentWindows()
+    }
+
     func stop() {
         endObservingActivations()
         allowedTargets = []
-        activationPolicy = ApplicationAllowlistPolicy(targets: [])
+        windowPolicy = WindowAllowlistPolicy(targets: [])
+        lastFullScanUptime = -.infinity
 
         let outcome = restorationTracker.restorePendingWindows()
         if outcome.pendingCount > 0 {
@@ -125,22 +171,43 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                 as? NSRunningApplication,
             application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
             application.activationPolicy == .regular,
-            let bundleIdentifier = application.bundleIdentifier
+            let bundleIdentifier = application.bundleIdentifier,
+            !AccessibilityWindowCatalog.isEssentialSystemApplication(
+                bundleIdentifier: bundleIdentifier
+            )
         else {
             return
         }
 
-        let decision = activationPolicy.handleActivation(
-            bundleIdentifier: bundleIdentifier
-        )
-        guard case let .block(refocusBundleIdentifier) = decision else {
-            return
-        }
-
         do {
-            try minimizeWindows(of: application)
-            restoreAllowedFocus(preferredBundleIdentifier: refocusBundleIdentifier)
-            publishBlockedNotice(for: application.localizedName ?? "That app")
+            let applicationTarget = makeApplicationTarget(application)
+            let windows = try windowCatalog.catalogueWindows(for: applicationTarget)
+            try enforce(windows: windows, applicationName: applicationTarget.displayName)
+
+            guard let focusedWindow = windows.first(where: \.isFocused) else {
+                if !allowedTargets.contains(where: {
+                    if case let .application(target) = $0 {
+                        return target.bundleIdentifier == bundleIdentifier
+                    }
+                    return false
+                }) {
+                    restoreAllowedFocus(preferredTarget: nil)
+                    publishBlockedNotice(
+                        "\(applicationTarget.displayName) is outside this focus session."
+                    )
+                }
+                return
+            }
+
+            let decision = windowPolicy.handleActivation(focusedWindow.observation)
+            guard case let .block(refocusTarget) = decision else {
+                return
+            }
+
+            restoreAllowedFocus(preferredTarget: refocusTarget)
+            publishBlockedNotice(
+                "\(focusedWindow.target.title) is outside this focus session."
+            )
         } catch {
             NSApplication.shared.activate(ignoringOtherApps: true)
             stop()
@@ -180,133 +247,167 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         isObserving = false
     }
 
-    private func minimizeCurrentlyDisallowedApplications() throws {
-        guard !allowedTargets.isEmpty else {
-            return
-        }
-
-        let allowedBundleIdentifiers = Set(allowedTargets.map(\.bundleIdentifier))
+    private func enforceCurrentWindows() throws {
+        lastFullScanUptime = ProcessInfo.processInfo.systemUptime
+        let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?
+            .processIdentifier
+        var refocusTarget: TargetIdentifier?
+        var blockedNotice: String?
 
         for application in NSWorkspace.shared.runningApplications where
             application.activationPolicy == .regular
+                && !application.isTerminated
                 && application.processIdentifier != ProcessInfo.processInfo.processIdentifier
-                && !allowedBundleIdentifiers.contains(application.bundleIdentifier ?? "")
-                && !application.isHidden
         {
-            try minimizeWindows(of: application)
+            guard
+                let bundleIdentifier = application.bundleIdentifier,
+                !AccessibilityWindowCatalog.isEssentialSystemApplication(
+                    bundleIdentifier: bundleIdentifier
+                )
+            else {
+                continue
+            }
+
+            let target = makeApplicationTarget(application)
+            let windows = try windowCatalog.catalogueWindows(for: target)
+
+            if application.processIdentifier == frontmostProcessIdentifier {
+                if let focusedWindow = windows.first(where: \.isFocused) {
+                    if case let .block(preferredTarget) = windowPolicy.handleActivation(
+                        focusedWindow.observation
+                    ) {
+                        refocusTarget = preferredTarget
+                        blockedNotice = "\(focusedWindow.target.title) is outside this focus session."
+                    }
+                } else if !isEntireApplicationAllowed(
+                    bundleIdentifier: bundleIdentifier
+                ) {
+                    blockedNotice = "\(target.displayName) is outside this focus session."
+                }
+            }
+            try enforce(windows: windows, applicationName: target.displayName)
+        }
+
+        if let blockedNotice {
+            restoreAllowedFocus(preferredTarget: refocusTarget)
+            publishBlockedNotice(blockedNotice)
         }
     }
 
-    private func minimizeWindows(of application: NSRunningApplication) throws {
-        let applicationName = application.localizedName ?? "a running application"
-        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            applicationElement,
-            kAXWindowsAttribute as CFString,
-            &value
-        )
+    private func isEntireApplicationAllowed(bundleIdentifier: String) -> Bool {
+        allowedTargets.contains { target in
+            guard case let .application(application) = target else {
+                return false
+            }
+            return application.bundleIdentifier == bundleIdentifier
+        }
+    }
 
-        guard result == .success, let windows = value as? [AXUIElement] else {
+    private func enforce(
+        windows: [CataloguedAccessibilityWindow],
+        applicationName: String
+    ) throws {
+        for window in windows where !windowPolicy.allows(window.observation) {
+            try minimize(window.element, applicationName: applicationName)
+        }
+    }
+
+    private func minimize(
+        _ window: AXUIElement,
+        applicationName: String
+    ) throws {
+        switch windowOperator.minimizedState(of: window) {
+        case .minimized(true), .unavailable:
+            return
+        case .failed:
+            throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
+        case .minimized(false):
+            break
+        }
+
+        switch windowOperator.setMinimized(true, for: window) {
+        case .success:
+            restorationTracker.recordChangedWindow(window)
+        case .unavailable:
+            return
+        case .failed:
             throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
         }
-
-        for window in windows {
-            switch windowOperator.minimizedState(of: window) {
-            case .minimized(true):
-                continue
-
-            case .unavailable:
-                continue
-
-            case .failed:
-                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
-
-            case .minimized(false):
-                break
-            }
-
-            switch windowOperator.setMinimized(true, for: window) {
-            case .success:
-                restorationTracker.recordChangedWindow(window)
-            case .unavailable:
-                continue
-            case .failed:
-                throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
-            }
-        }
     }
 
-    private func activateInitialAllowedApplicationIfRunning() {
-        guard let target = allowedTargets.first(where: {
-            runningApplication(for: $0.bundleIdentifier, preferredProcessIdentifier: $0.processIdentifier)
-                != nil
-        }) else {
+    private func activateInitialAllowedTarget() {
+        restoreAllowedFocus(preferredTarget: allowedTargets.first?.id)
+    }
+
+    private func restoreAllowedFocus(preferredTarget: TargetIdentifier?) {
+        let preferred = preferredTarget.flatMap { identifier in
+            allowedTargets.first { $0.id == identifier }
+        }
+        let orderedTargets = (preferred.map { [$0] } ?? [])
+            + allowedTargets.filter { $0.id != preferred?.id }
+
+        for target in orderedTargets where activate(target) {
             return
         }
-
-        _ = activationPolicy.handleActivation(
-            bundleIdentifier: target.bundleIdentifier
-        )
-        _ = runningApplication(
-            for: target.bundleIdentifier,
-            preferredProcessIdentifier: target.processIdentifier
-        )?.activate(options: [.activateAllWindows])
-    }
-
-    private func restoreAllowedFocus(preferredBundleIdentifier: String?) {
-        let preferredTarget = preferredBundleIdentifier.flatMap { bundleIdentifier in
-            allowedTargets.first { $0.bundleIdentifier == bundleIdentifier }
-        }
-        let orderedTargets = (preferredTarget.map { [$0] } ?? [])
-            + allowedTargets.filter {
-                $0.bundleIdentifier != preferredTarget?.bundleIdentifier
-            }
-
-        for target in orderedTargets {
-            guard let application = runningApplication(
-                for: target.bundleIdentifier,
-                preferredProcessIdentifier: target.processIdentifier
-            ) else {
-                continue
-            }
-            _ = activationPolicy.handleActivation(
-                bundleIdentifier: target.bundleIdentifier
-            )
-            if application.activate(options: [.activateAllWindows]) {
-                return
-            }
-        }
-
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
+    private func activate(_ target: SessionTarget) -> Bool {
+        switch target {
+        case let .application(applicationTarget):
+            guard let application = runningApplication(for: applicationTarget) else {
+                return false
+            }
+            return application.activate(options: [.activateAllWindows])
+
+        case let .window(windowTarget):
+            guard
+                let application = runningApplication(for: windowTarget.application),
+                let element = windowCatalog.element(for: windowTarget.id)
+            else {
+                return false
+            }
+            _ = application.activate(options: [])
+            return windowOperator.raise(element) == .success
+        }
+    }
+
     private func runningApplication(
-        for bundleIdentifier: String,
-        preferredProcessIdentifier: Int32?
+        for target: ApplicationTarget
     ) -> NSRunningApplication? {
-        let preferredApplication = preferredProcessIdentifier.flatMap {
+        let preferredApplication = target.processIdentifier.flatMap {
             NSRunningApplication(processIdentifier: $0)
         }
         if let preferredApplication,
            !preferredApplication.isTerminated,
-           preferredApplication.bundleIdentifier == bundleIdentifier
+           preferredApplication.bundleIdentifier == target.bundleIdentifier
         {
             return preferredApplication
         }
 
         return NSRunningApplication.runningApplications(
-            withBundleIdentifier: bundleIdentifier
+            withBundleIdentifier: target.bundleIdentifier
         ).first(where: { !$0.isTerminated })
     }
 
-    private func publishBlockedNotice(for applicationName: String) {
-        let now = Date()
-        guard now.timeIntervalSince(lastNoticeAt) >= 2 else {
+    private func makeApplicationTarget(
+        _ application: NSRunningApplication
+    ) -> ApplicationTarget {
+        ApplicationTarget(
+            displayName: application.localizedName ?? "Application",
+            bundleIdentifier: application.bundleIdentifier ?? "",
+            processIdentifier: application.processIdentifier,
+            applicationURL: application.bundleURL
+        )
+    }
+
+    private func publishBlockedNotice(_ message: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastNoticeUptime >= 2 else {
             return
         }
 
-        lastNoticeAt = now
-        onBlockedApplication?("\(applicationName) is outside this focus session.")
+        lastNoticeUptime = now
+        onBlockedApplication?(message)
     }
 }

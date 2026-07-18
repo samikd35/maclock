@@ -40,7 +40,7 @@ import Testing
         Issue.record("A disappeared target should abort enforcement")
         return
     }
-    #expect(draft.targets == [target])
+    #expect(draft.targets == [.application(target)])
     #expect(expectedError.localizedDescription.contains("Research"))
     #expect(expectedError.localizedDescription.contains("no longer installed"))
 }
@@ -83,6 +83,10 @@ private final class UnusedWindowOperator: AccessibilityWindowOperating {
         _ minimized: Bool,
         for window: AXUIElement
     ) -> AccessibilityWindowWriteResult {
+        .failed
+    }
+
+    func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult {
         .failed
     }
 }

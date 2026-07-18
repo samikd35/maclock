@@ -1,8 +1,8 @@
 # StayPane
 
-StayPane is a source-only macOS menu-bar focus timer. You choose one or more running or installed applications and a duration; during the session, StayPane minimizes other app windows and returns focus to the most recently used allowed app without quitting anything.
+StayPane is a source-only macOS menu-bar focus timer. You choose one or more applications or exact windows and a duration; during the session, StayPane minimizes other windows and returns focus to the most recently used allowed target without quitting anything.
 
-Ticket 01 targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Screen Recording permission is not required.
+StayPane targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Window discovery and hover outlines use Accessibility geometry only: Screen Recording permission is not required.
 
 ## Build and run
 
@@ -24,6 +24,8 @@ make test
 
 ## Current scope
 
-Application sessions support an allowlist of multiple running applications plus closed installed applications selected from their `.app` bundles. An application target is intentionally broad: every current and future window, and all content inside the application, remains available. Exact individual-window and browser-tab targeting belong to later tickets in [`tickets.md`](tickets.md).
+Sessions support multiple broad application targets and exact windows. A broad application target may be running or selected from an installed `.app` bundle; every current and future window and all content inside it remains available. Expanding a running application lets you choose exact current windows instead. Exact selection permits the chosen window and its attached sheets or modal dialogs while sibling, reopened, and newly created independent windows stay blocked. Browser-tab targeting belongs to a later ticket in [`tickets.md`](tickets.md).
+
+Platform-dependent acceptance steps for multiple displays, Spaces, full-screen windows, system dialogs, and restoration are documented in [`docs/manual-testing/ticket-04-window-enforcement.md`](docs/manual-testing/ticket-04-window-enforcement.md).
 
 During an active session, **End Session Early**, ordinary Quit, and Command-Q all use the same controlled exit: enforcement stays active for a visible 30-second countdown, then a final confirmation is required. Force Quit remains a deliberate bypass outside StayPane's honest self-control boundary.

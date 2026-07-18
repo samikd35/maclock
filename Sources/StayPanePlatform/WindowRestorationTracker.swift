@@ -17,6 +17,7 @@ public enum AccessibilityWindowWriteResult: Equatable, Sendable {
 public protocol AccessibilityWindowOperating: AnyObject {
     func minimizedState(of window: AXUIElement) -> AccessibilityWindowState
     func setMinimized(_ minimized: Bool, for window: AXUIElement) -> AccessibilityWindowWriteResult
+    func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult
 }
 
 @MainActor
@@ -51,6 +52,14 @@ public final class SystemAccessibilityWindowOperator: AccessibilityWindowOperati
             value
         )
 
+        if result == .invalidUIElement {
+            return .unavailable
+        }
+        return result == .success ? .success : .failed
+    }
+
+    public func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult {
+        let result = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         if result == .invalidUIElement {
             return .unavailable
         }

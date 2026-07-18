@@ -43,45 +43,213 @@ public struct ApplicationTarget: Equatable, Hashable, Sendable {
     }
 }
 
-public enum ApplicationActivationDecision: Equatable, Sendable {
-    case allow
-    case block(refocusBundleIdentifier: String?)
+public struct WindowIdentifier: RawRepresentable, Equatable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
 }
 
-public struct ApplicationAllowlistPolicy: Equatable, Sendable {
-    private let allowedBundleIdentifiers: Set<String>
-    private let fallbackBundleIdentifier: String?
-    private var lastActivatedAllowedBundleIdentifier: String?
+public struct WindowTarget: Equatable, Hashable, Sendable {
+    public let id: WindowIdentifier
+    public let title: String
+    public let application: ApplicationTarget
 
-    public init(targets: [ApplicationTarget]) {
-        allowedBundleIdentifiers = Set(targets.map(\.bundleIdentifier))
-        fallbackBundleIdentifier = targets.first?.bundleIdentifier
+    public init(
+        id: WindowIdentifier,
+        title: String,
+        application: ApplicationTarget
+    ) {
+        self.id = id
+        self.title = title
+        self.application = application
+    }
+}
+
+public enum TargetIdentifier: Equatable, Hashable, Sendable {
+    case application(bundleIdentifier: String)
+    case window(WindowIdentifier)
+}
+
+public enum SessionTarget: Equatable, Hashable, Sendable {
+    case application(ApplicationTarget)
+    case window(WindowTarget)
+
+    public var id: TargetIdentifier {
+        switch self {
+        case let .application(application):
+            .application(bundleIdentifier: application.bundleIdentifier)
+        case let .window(window):
+            .window(window.id)
+        }
     }
 
-    public func allowsApplication(bundleIdentifier: String) -> Bool {
-        allowedBundleIdentifiers.contains(bundleIdentifier)
+    public var bundleIdentifier: String {
+        switch self {
+        case let .application(application):
+            application.bundleIdentifier
+        case let .window(window):
+            window.application.bundleIdentifier
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case let .application(application):
+            application.displayName
+        case let .window(window):
+            window.title
+        }
+    }
+
+    public var application: ApplicationTarget {
+        switch self {
+        case let .application(application):
+            application
+        case let .window(window):
+            window.application
+        }
+    }
+}
+
+public struct TargetSelectionPolicy: Equatable, Sendable {
+    public private(set) var targets: [SessionTarget]
+
+    public init(targets: [SessionTarget] = []) {
+        self.targets = targets
+    }
+
+    @discardableResult
+    public mutating func select(_ target: SessionTarget) -> Bool {
+        switch target {
+        case let .application(application):
+            let insertionIndex = targets.firstIndex {
+                $0.bundleIdentifier == application.bundleIdentifier
+            }
+            targets.removeAll {
+                $0.bundleIdentifier == application.bundleIdentifier
+            }
+            targets.insert(
+                target,
+                at: min(insertionIndex ?? targets.endIndex, targets.endIndex)
+            )
+            return true
+
+        case let .window(window):
+            guard !targets.contains(where: {
+                if case let .application(application) = $0 {
+                    return application.bundleIdentifier
+                        == window.application.bundleIdentifier
+                }
+                return false
+            }) else {
+                return false
+            }
+
+            if let index = targets.firstIndex(where: { $0.id == target.id }) {
+                targets[index] = target
+            } else {
+                targets.append(target)
+            }
+            return true
+        }
+    }
+
+    public mutating func deselect(_ identifier: TargetIdentifier) {
+        targets.removeAll { $0.id == identifier }
+    }
+}
+
+public enum WindowRelationship: Equatable, Hashable, Sendable {
+    case independent
+    case transient(ancestorWindowIdentifiers: [WindowIdentifier])
+    case systemRequired
+}
+
+public struct ObservedWindow: Equatable, Hashable, Sendable {
+    public let id: WindowIdentifier
+    public let bundleIdentifier: String
+    public let relationship: WindowRelationship
+
+    public init(
+        id: WindowIdentifier,
+        bundleIdentifier: String,
+        relationship: WindowRelationship
+    ) {
+        self.id = id
+        self.bundleIdentifier = bundleIdentifier
+        self.relationship = relationship
+    }
+}
+
+public enum WindowActivationDecision: Equatable, Sendable {
+    case allow
+    case block(refocusTarget: TargetIdentifier?)
+}
+
+public struct WindowAllowlistPolicy: Equatable, Sendable {
+    private let allowedApplicationBundleIdentifiers: Set<String>
+    private let allowedWindowIdentifiers: Set<WindowIdentifier>
+    private let fallbackTarget: TargetIdentifier?
+    private var lastActivatedAllowedTarget: TargetIdentifier?
+
+    public init(targets: [SessionTarget]) {
+        allowedApplicationBundleIdentifiers = Set(targets.compactMap { target in
+            guard case let .application(application) = target else {
+                return nil
+            }
+            return application.bundleIdentifier
+        })
+        allowedWindowIdentifiers = Set(targets.compactMap { target in
+            guard case let .window(window) = target else {
+                return nil
+            }
+            return window.id
+        })
+        fallbackTarget = targets.first?.id
+    }
+
+    public func allows(_ window: ObservedWindow) -> Bool {
+        if case .systemRequired = window.relationship {
+            return true
+        }
+        if allowedApplicationBundleIdentifiers.contains(window.bundleIdentifier) {
+            return true
+        }
+        if allowedWindowIdentifiers.contains(window.id) {
+            return true
+        }
+        if case let .transient(ancestorWindowIdentifiers) = window.relationship {
+            return !allowedWindowIdentifiers.isDisjoint(
+                with: ancestorWindowIdentifiers
+            )
+        }
+        return false
     }
 
     public mutating func handleActivation(
-        bundleIdentifier: String
-    ) -> ApplicationActivationDecision {
-        guard allowsApplication(bundleIdentifier: bundleIdentifier) else {
+        _ window: ObservedWindow
+    ) -> WindowActivationDecision {
+        guard allows(window) else {
             return .block(
-                refocusBundleIdentifier: lastActivatedAllowedBundleIdentifier
-                    ?? fallbackBundleIdentifier
+                refocusTarget: lastActivatedAllowedTarget ?? fallbackTarget
             )
         }
 
-        lastActivatedAllowedBundleIdentifier = bundleIdentifier
+        if case .systemRequired = window.relationship {
+            return .allow
+        }
+        lastActivatedAllowedTarget = .window(window.id)
         return .allow
     }
 }
 
 public struct SessionDraft: Equatable, Sendable {
     public let duration: SessionDuration
-    public let targets: [ApplicationTarget]
+    public let targets: [SessionTarget]
 
-    public init(duration: SessionDuration, targets: [ApplicationTarget]) {
+    public init(duration: SessionDuration, targets: [SessionTarget]) {
         self.duration = duration
         self.targets = targets
     }
@@ -90,13 +258,13 @@ public struct SessionDraft: Equatable, Sendable {
 public struct SessionPlan: Equatable, Sendable {
     public let id: UUID
     public let duration: SessionDuration
-    public let targets: [ApplicationTarget]
+    public let targets: [SessionTarget]
     public let preparedAt: Date
 
     public init(
         id: UUID = UUID(),
         duration: SessionDuration,
-        targets: [ApplicationTarget],
+        targets: [SessionTarget],
         preparedAt: Date
     ) {
         precondition(!targets.isEmpty, "A session plan requires at least one target")
@@ -247,7 +415,8 @@ public protocol SessionClock: AnyObject {
 
 @MainActor
 public protocol SessionEnforcing: AnyObject {
-    func start(allowing targets: [ApplicationTarget]) throws
+    func start(allowing targets: [SessionTarget]) throws
+    func refresh() throws
     func stop()
 }
 
@@ -279,6 +448,10 @@ public final class SessionEngine {
     }
 
     public func select(target: ApplicationTarget) {
+        select(target: .application(target))
+    }
+
+    public func select(target: SessionTarget) {
         guard case let .configuring(draft) = state else {
             if case let .ready(draft) = state {
                 state = .ready(draft.selecting(target))
@@ -311,6 +484,26 @@ public final class SessionEngine {
             targets: draft.targets.filter {
                 $0.bundleIdentifier != bundleIdentifier
             }
+        )
+        state = updatedDraft.targets.isEmpty
+            ? .configuring(updatedDraft)
+            : .ready(updatedDraft)
+    }
+
+    public func deselectTarget(_ identifier: TargetIdentifier) {
+        let draft: SessionDraft
+        switch state {
+        case let .configuring(currentDraft), let .ready(currentDraft):
+            draft = currentDraft
+        default:
+            return
+        }
+
+        var selectionPolicy = TargetSelectionPolicy(targets: draft.targets)
+        selectionPolicy.deselect(identifier)
+        let updatedDraft = SessionDraft(
+            duration: draft.duration,
+            targets: selectionPolicy.targets
         )
         state = updatedDraft.targets.isEmpty
             ? .configuring(updatedDraft)
@@ -436,9 +629,15 @@ public final class SessionEngine {
         case let .enforcing(activeSession) where hasCompleted(activeSession):
             completeNormally(activeSession)
 
+        case .enforcing:
+            try enforcement.refresh()
+
         case let .resetPending(pendingReset)
             where hasCompleted(pendingReset.activeSession):
             completeNormally(pendingReset.activeSession)
+
+        case .resetPending:
+            try enforcement.refresh()
 
         default:
             break
@@ -509,15 +708,9 @@ public final class SessionEngine {
 }
 
 private extension SessionDraft {
-    func selecting(_ target: ApplicationTarget) -> SessionDraft {
-        var updatedTargets = targets
-        if let index = updatedTargets.firstIndex(where: {
-            $0.bundleIdentifier == target.bundleIdentifier
-        }) {
-            updatedTargets[index] = target
-        } else {
-            updatedTargets.append(target)
-        }
-        return SessionDraft(duration: duration, targets: updatedTargets)
+    func selecting(_ target: SessionTarget) -> SessionDraft {
+        var selectionPolicy = TargetSelectionPolicy(targets: targets)
+        _ = selectionPolicy.select(target)
+        return SessionDraft(duration: duration, targets: selectionPolicy.targets)
     }
 }

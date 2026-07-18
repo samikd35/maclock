@@ -123,7 +123,7 @@ struct StayPaneMenuView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Allowed applications")
+                    Text("Allowed targets")
                         .font(.headline)
                     Spacer()
                     Button {
@@ -142,39 +142,7 @@ struct StayPaneMenuView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(model.applications, id: \.id) { application in
-                            Toggle(
-                                isOn: Binding(
-                                    get: {
-                                        model.selectedApplicationIDs.contains(application.id)
-                                    },
-                                    set: {
-                                        model.setApplication(
-                                            id: application.id,
-                                            isSelected: $0
-                                        )
-                                    }
-                                )
-                            ) {
-                                HStack(spacing: 8) {
-                                    Image(nsImage: application.icon)
-                                        .resizable()
-                                        .frame(width: 22, height: 22)
-                                    Text(application.target.displayName)
-                                    Spacer()
-                                    Text(applicationStatus(application))
-                                        .font(.caption2)
-                                        .foregroundStyle(
-                                            application.isAvailable
-                                                ? Color.secondary
-                                                : Color.red
-                                        )
-                                }
-                            }
-                            .toggleStyle(.checkbox)
-                            .disabled(
-                                !application.isAvailable
-                                    && !model.selectedApplicationIDs.contains(application.id)
-                            )
+                            applicationPickerRow(application)
                         }
                     }
                 }
@@ -188,6 +156,9 @@ struct StayPaneMenuView: View {
 
                 if !model.selectedApplicationIDs.isEmpty {
                     broadApplicationWarning
+                }
+                if !model.selectedWindowIDs.isEmpty {
+                    preciseWindowNote
                 }
             }
 
@@ -234,21 +205,41 @@ struct StayPaneMenuView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Review your session")
                 .font(.title2.weight(.semibold))
-            Text("Once the countdown finishes, the application allowlist and duration stay locked until the session ends.")
+            Text("Once the countdown finishes, the selected targets and duration stay locked until the session ends.")
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Application targets")
+                Text("Allowed targets")
                     .font(.headline)
-                ForEach(model.selectedApplications) { application in
-                    reviewRow(
-                        title: application.isRunning ? "Running application" : "Installed application",
-                        value: application.target.displayName,
-                        systemImage: "macwindow"
-                    )
+                ForEach(model.configuredTargets, id: \.id) { target in
+                    switch target {
+                    case let .application(application):
+                        reviewRow(
+                            title: "Entire application",
+                            value: application.displayName,
+                            systemImage: "macwindow"
+                        )
+                    case let .window(window):
+                        reviewRow(
+                            title: "Individual window in \(window.application.displayName)",
+                            value: window.title,
+                            systemImage: "macwindow.on.rectangle"
+                        )
+                    }
                 }
             }
-            broadApplicationWarning
+            if model.configuredTargets.contains(where: {
+                if case .application = $0 { return true }
+                return false
+            }) {
+                broadApplicationWarning
+            }
+            if model.configuredTargets.contains(where: {
+                if case .window = $0 { return true }
+                return false
+            }) {
+                preciseWindowNote
+            }
             reviewRow(
                 title: "Duration",
                 value: model.formattedDuration,
@@ -280,7 +271,7 @@ struct StayPaneMenuView: View {
             Text("\(model.countdownNumber)")
                 .font(.system(size: 72, weight: .bold, design: .rounded).monospacedDigit())
                 .contentTransition(.numericText())
-            Text("Only \(applicationNames(plan.targets)) will remain available for \(model.formattedDuration).")
+            Text("Only \(targetNames(plan.targets)) will remain available for \(model.formattedDuration).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Cancel countdown") {
@@ -303,16 +294,16 @@ struct StayPaneMenuView: View {
                 .contentTransition(.numericText())
 
             VStack(spacing: 6) {
-                Text("Allowed applications")
+                Text("Allowed targets")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                ForEach(activeSession.plan.targets, id: \.bundleIdentifier) { target in
-                    Text(target.displayName)
+                ForEach(activeSession.plan.targets, id: \.id) { target in
+                    Text(targetLabel(target))
                         .font(.title3.weight(.semibold))
                 }
             }
 
-            Text("Other app windows are minimized. If you activate one, StayPane returns focus here without quitting anything.")
+            Text("Other application windows are minimized. Sheets and dialogs attached to an allowed window remain usable; unrelated windows stay blocked.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -361,7 +352,7 @@ struct StayPaneMenuView: View {
                     .contentTransition(.numericText())
                 Text("seconds until final confirmation")
                     .foregroundStyle(.secondary)
-                Text("The original allowlist—\(applicationNames(pendingReset.activeSession.plan.targets))—remains enforced. The focus timer is still running.")
+                Text("The original allowlist—\(targetNames(pendingReset.activeSession.plan.targets))—remains enforced. The focus timer is still running.")
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -388,7 +379,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.green)
             Text("Session complete")
                 .font(.title2.weight(.semibold))
-            Text("You focused with \(applicationNames(completedSession.plan.targets)) for \(StayPaneModel.formatPreset(seconds: completedSession.plan.duration.seconds)).")
+            Text("You focused with \(targetNames(completedSession.plan.targets)) for \(StayPaneModel.formatPreset(seconds: completedSession.plan.duration.seconds)).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Text("Only windows changed by StayPane were restored.")
@@ -447,6 +438,118 @@ struct StayPaneMenuView: View {
         )
     }
 
+    private var preciseWindowNote: some View {
+        Label(
+            "Window targets are precise. Only each chosen window and its attached sheets or modal dialogs are allowed; sibling and newly opened independent windows stay blocked.",
+            systemImage: "macwindow.on.rectangle"
+        )
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.blue)
+        .padding(10)
+        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func applicationPickerRow(
+        _ application: ApplicationCatalogItem
+    ) -> some View {
+        if application.isRunning {
+            DisclosureGroup(
+                isExpanded: Binding(
+                    get: {
+                        model.expandedApplicationIDs.contains(application.id)
+                    },
+                    set: {
+                        model.setApplicationExpanded(
+                            id: application.id,
+                            isExpanded: $0
+                        )
+                    }
+                )
+            ) {
+                let windows = model.windows(for: application.id)
+                if windows.isEmpty {
+                    Text("No current windows")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 28)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(windows, id: \.id) { window in
+                            Toggle(
+                                isOn: Binding(
+                                    get: {
+                                        model.selectedWindowIDs.contains(window.id)
+                                    },
+                                    set: {
+                                        model.setWindow(
+                                            id: window.id,
+                                            isSelected: $0
+                                        )
+                                    }
+                                )
+                            ) {
+                                Label(
+                                    window.target.title,
+                                    systemImage: "macwindow"
+                                )
+                                .font(.subheadline)
+                            }
+                            .toggleStyle(.checkbox)
+                            .disabled(
+                                model.selectedApplicationIDs.contains(application.id)
+                            )
+                            .padding(.leading, 24)
+                            .onHover {
+                                model.highlightWindow(
+                                    id: window.id,
+                                    isHighlighted: $0
+                                )
+                            }
+                        }
+                    }
+                }
+            } label: {
+                applicationToggle(application)
+            }
+        } else {
+            applicationToggle(application)
+        }
+    }
+
+    private func applicationToggle(
+        _ application: ApplicationCatalogItem
+    ) -> some View {
+        Toggle(
+            isOn: Binding(
+                get: {
+                    model.selectedApplicationIDs.contains(application.id)
+                },
+                set: {
+                    model.setApplication(id: application.id, isSelected: $0)
+                }
+            )
+        ) {
+            HStack(spacing: 8) {
+                Image(nsImage: application.icon)
+                    .resizable()
+                    .frame(width: 22, height: 22)
+                Text(application.target.displayName)
+                Spacer()
+                Text(applicationStatus(application))
+                    .font(.caption2)
+                    .foregroundStyle(
+                        application.isAvailable ? Color.secondary : Color.red
+                    )
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(
+            !application.isAvailable
+                && !model.selectedApplicationIDs.contains(application.id)
+        )
+    }
+
     private func applicationStatus(_ application: ApplicationCatalogItem) -> String {
         if application.isRunning {
             return "Running"
@@ -454,8 +557,8 @@ struct StayPaneMenuView: View {
         return application.isAvailable ? "Installed" : "Unavailable"
     }
 
-    private func applicationNames(_ targets: [ApplicationTarget]) -> String {
-        let names = targets.map(\.displayName)
+    private func targetNames(_ targets: [SessionTarget]) -> String {
+        let names = targets.map(targetLabel)
         if names.count <= 1 {
             return names.first ?? "your selected applications"
         }
@@ -465,6 +568,15 @@ struct StayPaneMenuView: View {
         return names.dropLast().joined(separator: ", ")
             + ", and "
             + (names.last ?? "")
+    }
+
+    private func targetLabel(_ target: SessionTarget) -> String {
+        switch target {
+        case let .application(application):
+            application.displayName
+        case let .window(window):
+            "\(window.title) in \(window.application.displayName)"
+        }
     }
 
     private func reviewRow(title: String, value: String, systemImage: String) -> some View {

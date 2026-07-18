@@ -71,4 +71,8 @@ private final class FakeWindowOperator: AccessibilityWindowOperating {
         }
         return .success
     }
+
+    func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult {
+        .success
+    }
 }

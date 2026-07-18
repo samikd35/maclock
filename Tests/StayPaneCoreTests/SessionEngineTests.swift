@@ -28,14 +28,14 @@ import Testing
         Issue.record("Expected ready")
         return
     }
-    #expect(readyDraft.targets == [target])
+    #expect(readyDraft.targets == [.application(target)])
 
     try engine.beginStartCountdown()
     guard case let .starting(plan, startsAt) = engine.state else {
         Issue.record("Expected starting")
         return
     }
-    #expect(plan.targets == [target])
+    #expect(plan.targets == [.application(target)])
     #expect(startsAt == clock.now.addingTimeInterval(3))
 
     clock.advance(by: 2)
@@ -52,7 +52,7 @@ import Testing
         Issue.record("Expected enforcing")
         return
     }
-    #expect(enforcement.startedTargets == [target])
+    #expect(enforcement.startedTargets == [.application(target)])
     #expect(activeSession.endsAt == clock.now.addingTimeInterval(30 * 60))
 
     clock.advance(by: 30 * 60 - 1)
@@ -130,7 +130,7 @@ import Testing
         Issue.record("Expected ready after cancellation")
         return
     }
-    #expect(draft.targets == [target])
+    #expect(draft.targets == [.application(target)])
     #expect(enforcement.startedTargets.isEmpty)
 }
 
@@ -157,7 +157,7 @@ import Testing
         Issue.record("Expected ready after enforcement failed")
         return
     }
-    #expect(draft.targets == [target])
+    #expect(draft.targets == [.application(target)])
     #expect(enforcement.startedTargets.isEmpty)
     #expect(enforcement.stopCount == 0)
 }
@@ -273,7 +273,7 @@ import Testing
         Issue.record("Expected ended-early")
         return
     }
-    #expect(endedSession.plan.targets == [target])
+    #expect(endedSession.plan.targets == [.application(target)])
     #expect(endedSession.endedAt == clock.now)
     #expect(endedSession.actualFocusDuration == 30)
     #expect(enforcement.stopCount == 1)
@@ -477,7 +477,7 @@ import Testing
         Issue.record("Expected ready with a non-empty allowlist")
         return
     }
-    #expect(draft.targets == [editor, reference])
+    #expect(draft.targets == [.application(editor), .application(reference)])
 
     try engine.beginStartCountdown(seconds: 0)
     try engine.advance()
@@ -486,8 +486,51 @@ import Testing
         Issue.record("Expected enforcing")
         return
     }
-    #expect(activeSession.plan.targets == [editor, reference])
-    #expect(enforcement.startedAllowlists == [[editor, reference]])
+    #expect(
+        activeSession.plan.targets
+            == [.application(editor), .application(reference)]
+    )
+    #expect(
+        enforcement.startedAllowlists
+            == [[.application(editor), .application(reference)]]
+    )
+}
+
+@MainActor
+@Test func sessionKeepsEnforcingWhenEveryExactWindowHasClosed() throws {
+    let clock = FakeClock(now: Date(timeIntervalSince1970: 4_500))
+    let enforcement = FakeEnforcement()
+    let engine = SessionEngine(clock: clock, enforcement: enforcement)
+    let application = ApplicationTarget(
+        displayName: "Editor",
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 45
+    )
+    let window = WindowTarget(
+        id: WindowIdentifier(
+            rawValue: UUID(
+                uuidString: "00000000-0000-0000-0000-000000000045"
+            )!
+        ),
+        title: "Draft",
+        application: application
+    )
+
+    engine.beginConfiguration(duration: SessionDuration(seconds: 60)!)
+    engine.select(target: SessionTarget.window(window))
+    try engine.beginStartCountdown(seconds: 0)
+    try engine.advance()
+
+    // The enforcement adapter reports no failure when its exact targets disappear.
+    // It keeps polling so a reopened window receives a new, blocked identity.
+    try engine.advance()
+
+    guard case .enforcing = engine.state else {
+        Issue.record("A session with closed exact targets must remain active")
+        return
+    }
+    #expect(enforcement.refreshCount == 1)
+    #expect(enforcement.stopCount == 0)
 }
 
 @MainActor
@@ -514,7 +557,7 @@ import Testing
         Issue.record("One remaining target should keep the draft ready")
         return
     }
-    #expect(draft.targets == [reference])
+    #expect(draft.targets == [.application(reference)])
 
     engine.deselectTarget(bundleIdentifier: reference.bundleIdentifier)
     guard case let .configuring(emptyDraft) = engine.state else {
@@ -553,7 +596,7 @@ import Testing
         Issue.record("A failed preflight should return to the reviewed draft")
         return
     }
-    #expect(draft.targets == [editor, reference])
+    #expect(draft.targets == [.application(editor), .application(reference)])
     #expect(enforcement.startedAllowlists.isEmpty)
 }
 
@@ -583,17 +626,22 @@ private final class FakeClock: SessionClock {
 
 @MainActor
 private final class FakeEnforcement: SessionEnforcing {
-    var startedTargets: [ApplicationTarget] = []
-    var startedAllowlists: [[ApplicationTarget]] = []
+    var startedTargets: [SessionTarget] = []
+    var startedAllowlists: [[SessionTarget]] = []
     var stopCount = 0
     var startError: FakeEnforcementError?
+    var refreshCount = 0
 
-    func start(allowing targets: [ApplicationTarget]) throws {
+    func start(allowing targets: [SessionTarget]) throws {
         if let startError {
             throw startError
         }
         startedAllowlists.append(targets)
         startedTargets.append(contentsOf: targets)
+    }
+
+    func refresh() throws {
+        refreshCount += 1
     }
 
     func stop() {

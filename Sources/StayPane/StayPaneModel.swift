@@ -11,7 +11,11 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     @Published private(set) var state: SessionState = .idle
     @Published private(set) var applications: [ApplicationCatalogItem] = []
-    @Published private(set) var selectedApplicationIDs: Set<String> = []
+    @Published private(set) var windowsByApplicationID: [
+        String: [AccessibilityWindowCatalogItem]
+    ] = [:]
+    @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
+    @Published var expandedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
     @Published private(set) var durationValidationMessage: String?
     @Published private(set) var accessibilityAuthorized = false
@@ -25,6 +29,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let defaults: UserDefaults
     private let permissionClient: AccessibilityPermissionClient
     private let applicationCatalog: ApplicationCatalog
+    private let windowCatalog: AccessibilityWindowCatalog
+    private let outlineController: WindowOutlineController
     private let enforcement: ApplicationEnforcementController
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
@@ -37,9 +43,13 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         self.defaults = defaults
         permissionClient = AccessibilityPermissionClient()
         applicationCatalog = ApplicationCatalog()
+        let windowCatalog = AccessibilityWindowCatalog()
+        self.windowCatalog = windowCatalog
+        outlineController = WindowOutlineController()
         enforcement = ApplicationEnforcementController(
             permissionClient: permissionClient,
-            availabilityResolver: applicationCatalog
+            availabilityResolver: applicationCatalog,
+            windowCatalog: windowCatalog
         )
         engine = SessionEngine(clock: SystemSessionClock(), enforcement: enforcement)
 
@@ -86,9 +96,36 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         applications.filter { selectedApplicationIDs.contains($0.id) }
     }
 
+    var selectedApplicationIDs: Set<String> {
+        Set(selectedTargetIDs.compactMap { identifier in
+            guard case let .application(bundleIdentifier) = identifier else {
+                return nil
+            }
+            return bundleIdentifier
+        })
+    }
+
+    var selectedWindowIDs: Set<WindowIdentifier> {
+        Set(selectedTargetIDs.compactMap { identifier in
+            guard case let .window(windowIdentifier) = identifier else {
+                return nil
+            }
+            return windowIdentifier
+        })
+    }
+
+    var configuredTargets: [SessionTarget] {
+        switch engine.state {
+        case let .configuring(draft), let .ready(draft):
+            draft.targets
+        default:
+            []
+        }
+    }
+
     var canReview: Bool {
         accessibilityGranted
-            && !selectedApplicationIDs.isEmpty
+            && !selectedTargetIDs.isEmpty
             && selectedApplications.allSatisfy(\.isAvailable)
             && SessionDuration(seconds: durationSeconds) != nil
     }
@@ -146,7 +183,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         var refreshedApplications = Dictionary(
             uniqueKeysWithValues: applicationCatalog.load().map { ($0.id, $0) }
         )
-        let retainedApplicationIDs = selectedApplicationIDs.union(addedApplicationIDs)
+        let retainedApplicationIDs = Set(
+            configuredTargets.map(\.bundleIdentifier)
+        ).union(addedApplicationIDs)
 
         for id in retainedApplicationIDs where refreshedApplications[id] == nil {
             guard let previousApplication = previousApplications[id] else {
@@ -161,8 +200,27 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 == .orderedAscending
         }
 
-        for application in selectedApplications {
-            engine.select(target: application.target)
+        for target in configuredTargets {
+            guard case let .application(applicationTarget) = target,
+                  let application = applications.first(where: {
+                      $0.id == applicationTarget.bundleIdentifier
+                  })
+            else {
+                continue
+            }
+            engine.select(target: .application(application.target))
+        }
+
+        let applicationIDsWithWindowLists = expandedApplicationIDs.union(
+            configuredTargets.compactMap { target in
+                guard case let .window(window) = target else {
+                    return nil
+                }
+                return window.application.bundleIdentifier
+            }
+        )
+        for applicationID in applicationIDsWithWindowLists {
+            refreshWindows(for: applicationID)
         }
         synchronizeWithEngine()
     }
@@ -173,13 +231,82 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
 
         if isSelected {
-            selectedApplicationIDs.insert(id)
-            engine.select(target: application.target)
+            engine.select(target: .application(application.target))
         } else {
-            selectedApplicationIDs.remove(id)
-            engine.deselectTarget(bundleIdentifier: application.target.bundleIdentifier)
+            engine.deselectTarget(.application(bundleIdentifier: id))
         }
         synchronizeWithEngine()
+    }
+
+    func setWindow(id: WindowIdentifier, isSelected: Bool) {
+        guard let window = windowsByApplicationID.values
+            .joined()
+            .first(where: { $0.id == id })
+        else {
+            return
+        }
+
+        if isSelected {
+            engine.select(target: .window(window.target))
+        } else {
+            engine.deselectTarget(.window(id))
+        }
+        synchronizeWithEngine()
+    }
+
+    func setApplicationExpanded(id: String, isExpanded: Bool) {
+        if isExpanded {
+            expandedApplicationIDs.insert(id)
+            refreshWindows(for: id)
+        } else {
+            expandedApplicationIDs.remove(id)
+            outlineController.hide()
+        }
+    }
+
+    func windows(for applicationID: String) -> [AccessibilityWindowCatalogItem] {
+        windowsByApplicationID[applicationID] ?? []
+    }
+
+    func highlightWindow(id: WindowIdentifier, isHighlighted: Bool) {
+        guard isHighlighted else {
+            outlineController.hide()
+            return
+        }
+
+        if let window = windowsByApplicationID.values
+            .joined()
+            .first(where: { $0.id == id })
+        {
+            _ = try? windowCatalog.loadWindows(for: window.target.application)
+        }
+        guard let frame = windowCatalog.frame(for: id) else {
+            outlineController.hide()
+            return
+        }
+        outlineController.show(around: frame)
+    }
+
+    func refreshWindows(for applicationID: String) {
+        guard
+            let application = applications.first(where: { $0.id == applicationID }),
+            application.isRunning
+        else {
+            windowsByApplicationID[applicationID] = []
+            return
+        }
+
+        do {
+            let windows = try windowCatalog.loadWindows(for: application.target)
+            windowsByApplicationID[applicationID] = windows
+            removeClosedWindowSelections(
+                for: applicationID,
+                availableWindowIDs: Set(windows.map(\.id))
+            )
+        } catch {
+            windowsByApplicationID[applicationID] = []
+            showNotice(error.localizedDescription)
+        }
     }
 
     func addInstalledApplication() {
@@ -266,8 +393,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             showNotice("Grant Accessibility access before starting a session.")
             return
         }
-        guard !selectedApplications.isEmpty else {
-            showNotice("Choose at least one application to allow.")
+        guard !configuredTargets.isEmpty else {
+            showNotice("Choose at least one application or window to allow.")
             return
         }
         let unavailableApplications = selectedApplications.filter { !$0.isAvailable }
@@ -275,6 +402,21 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             showNotice(
                 "Remove or reinstall unavailable targets: "
                     + unavailableApplications.map(\.target.displayName).joined(separator: ", ")
+            )
+            return
+        }
+        let unavailableWindows = configuredTargets.compactMap { target -> WindowTarget? in
+            guard case let .window(window) = target,
+                  !windowCatalog.isAvailable(window)
+            else {
+                return nil
+            }
+            return window
+        }
+        guard unavailableWindows.isEmpty else {
+            showNotice(
+                "Choose reopened versions of these closed windows: "
+                    + unavailableWindows.map(\.title).joined(separator: ", ")
             )
             return
         }
@@ -294,6 +436,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
 
         do {
+            outlineController.hide()
             try engine.beginStartCountdown()
             isReviewing = false
             synchronizeWithEngine()
@@ -378,7 +521,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func startAnotherSession() {
         engine.beginConfiguration(duration: currentValidDuration())
-        selectedApplicationIDs = []
+        selectedTargetIDs = []
         isReviewing = false
         quitCoordinator.cancelDeferredQuit()
         synchronizeWithEngine()
@@ -390,11 +533,17 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             lastPermissionCheck = Date()
             refreshAccessibilityStatus(forceVerification: false)
             enforcement.retryPendingRestorations()
+            refreshExpandedWindowListsIfEditable()
         }
 
+        let wasActive = isActiveSession
         do {
             try engine.advance()
         } catch {
+            if wasActive {
+                failOpen(after: error)
+                return
+            }
             isReviewing = false
             refreshApplications()
             showNotice(error.localizedDescription)
@@ -454,16 +603,80 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         state = engine.state
         remainingTime = engine.remainingTime() ?? 0
         earlyResetRemainingTime = engine.earlyResetRemainingTime() ?? 0
+        switch state {
+        case let .configuring(draft), let .ready(draft):
+            selectedTargetIDs = Set(draft.targets.map(\.id))
+        case let .starting(plan, _):
+            selectedTargetIDs = Set(plan.targets.map(\.id))
+        case let .enforcing(activeSession):
+            selectedTargetIDs = Set(activeSession.plan.targets.map(\.id))
+        case let .resetPending(pendingReset):
+            selectedTargetIDs = Set(pendingReset.activeSession.plan.targets.map(\.id))
+        case .idle, .completed, .endedEarly:
+            selectedTargetIDs = []
+        }
     }
 
     private func failOpen(after error: Error) {
         engine.reset()
-        selectedApplicationIDs = []
+        selectedTargetIDs = []
+        outlineController.hide()
         isReviewing = false
         quitCoordinator.cancelDeferredQuit()
         engine.beginConfiguration(duration: currentValidDuration())
         synchronizeWithEngine()
         showNotice("Enforcement stopped safely: \(error.localizedDescription)")
+    }
+
+    private func refreshExpandedWindowListsIfEditable() {
+        switch engine.state {
+        case .configuring, .ready:
+            for applicationID in expandedApplicationIDs {
+                refreshWindows(for: applicationID)
+            }
+        default:
+            break
+        }
+    }
+
+    private func removeClosedWindowSelections(
+        for bundleIdentifier: String,
+        availableWindowIDs: Set<WindowIdentifier>
+    ) {
+        switch engine.state {
+        case .configuring, .ready:
+            removeClosedWindowSelectionsFromEditableDraft(
+                bundleIdentifier: bundleIdentifier,
+                availableWindowIDs: availableWindowIDs
+            )
+        default:
+            return
+        }
+    }
+
+    private func removeClosedWindowSelectionsFromEditableDraft(
+        bundleIdentifier: String,
+        availableWindowIDs: Set<WindowIdentifier>
+    ) {
+        let closedWindows = configuredTargets.compactMap { target -> WindowTarget? in
+            guard case let .window(window) = target,
+                  window.application.bundleIdentifier == bundleIdentifier,
+                  !availableWindowIDs.contains(window.id)
+            else {
+                return nil
+            }
+            return window
+        }
+        for window in closedWindows {
+            engine.deselectTarget(.window(window.id))
+        }
+        if !closedWindows.isEmpty {
+            synchronizeWithEngine()
+            showNotice(
+                "Closed window selections were removed: "
+                    + closedWindows.map(\.title).joined(separator: ", ")
+            )
+        }
     }
 
     private func terminateIfQuitRequestFinished() {
