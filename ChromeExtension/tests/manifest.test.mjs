@@ -11,8 +11,8 @@ test("is a local-only Manifest V3 extension with the fixed identity", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, "module");
-  assert.equal(manifest.incognito, "not_allowed");
-  assert.equal(manifest.version, "0.4.0");
+  assert.equal(manifest.incognito, "spanning");
+  assert.equal(manifest.version, "0.5.0");
   assert.deepEqual(
     [...manifest.permissions].sort(),
     ["favicon", "nativeMessaging", "storage", "tabs", "webNavigation"],

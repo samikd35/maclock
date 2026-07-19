@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "StayPane Chrome Companion",
   "description": "Local Chrome window and scoped-tab enforcement for StayPane Sessions.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAjr0dPPnsWZKDU57PovbdC0gUgeGWHm+IInxPIVIatSVp45noV7gMUqN4a0TiJt0Iwc4XllO/LvbfK3vmN8v5F1L1ZCRWiM4cACdi4+Ab0tnlAFCtpt2Pg9ON+QkE6tJpxA2SD+QFsbpEuCBcUvNaIL0GyIF5ynYHcIZv8HF2wcl+AxV82OkuJkzp10ZS2Ab2EDr8nZTtx1X5vi6flBdMMsAYDDJ4F3OQikyGA1uThz9ceXliyrQvpP7mXJbl4WosPxwlw+MkQUvPxRslNfg0HmoabByHtlRv01oLYgQDxNP6yjuhJfq0RsHM05PxjpB71umWs4aTONL4WYiZnrG5twIDAQAB",
   "minimum_chrome_version": "120",
-  "incognito": "not_allowed",
+  "incognito": "spanning",
   "permissions": [
     "favicon",
     "nativeMessaging",

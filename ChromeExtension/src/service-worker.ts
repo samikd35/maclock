@@ -223,6 +223,8 @@ async function ensureNativeConnection(): Promise<void> {
   }
   const profileIdentifier = await loadProfileIdentifier();
   try {
+    const incognitoWindowControl = await chrome.extension
+      .isAllowedIncognitoAccess();
     const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     nativePort = port;
     connectedProfileIdentifier = null;
@@ -240,7 +242,9 @@ async function ensureNativeConnection(): Promise<void> {
         async () => handleNativePortUnavailable(port),
       );
     });
-    port.postMessage(makeHello(profileIdentifier));
+    port.postMessage(makeHello(profileIdentifier, {
+      incognitoWindowControl,
+    }));
   } catch {
     nativePort = null;
     connectedProfileIdentifier = null;
@@ -311,6 +315,10 @@ async function handleNativeMessage(
 async function beginEnforcement(
   command: BeginEnforcement,
 ): Promise<void> {
+  if (!(await chrome.extension.isAllowedIncognitoAccess())) {
+    sendEnforcementError(command.profileId, "invalidCommand");
+    return;
+  }
   const windowCommands = command.targets.filter(
     (target): target is Extract<
       BeginEnforcement["targets"][number],
@@ -405,7 +413,11 @@ async function beginEnforcement(
         const state = restorableChromeWindowState(window.state);
         return window.id === undefined || state === null
           ? []
-          : [{ windowId: window.id, state }];
+          : [{
+              windowId: window.id,
+              state,
+              incognito: window.incognito,
+            }];
       },
     );
     const windowsToMinimize = chooseWindowsToMinimizeAtStart(

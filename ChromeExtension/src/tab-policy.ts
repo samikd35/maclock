@@ -10,6 +10,7 @@ export type RestorableChromeWindowState =
 export type ChromeWindowAtStart = {
   windowId: number;
   state: RestorableChromeWindowState | "minimized";
+  incognito: boolean;
 };
 
 export type MinimizedChromeWindow = {
@@ -48,7 +49,8 @@ export function chooseWindowsToMinimizeAtStart(
 ): MinimizedChromeWindow[] {
   const covered = new Set(coveredWindowIds);
   return windows.flatMap((window) =>
-    covered.has(window.windowId) || window.state === "minimized"
+    (!window.incognito && covered.has(window.windowId)) ||
+      window.state === "minimized"
       ? []
       : [{
           windowId: window.windowId,

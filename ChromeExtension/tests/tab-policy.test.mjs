@@ -11,10 +11,10 @@ test("start captures only uncovered restorable Chrome windows", () => {
   assert.deepEqual(
     chooseWindowsToMinimizeAtStart(
       [
-        { windowId: 7, state: "normal" },
-        { windowId: 8, state: "maximized" },
-        { windowId: 9, state: "fullscreen" },
-        { windowId: 10, state: "minimized" },
+        { windowId: 7, state: "normal", incognito: false },
+        { windowId: 8, state: "maximized", incognito: false },
+        { windowId: 9, state: "fullscreen", incognito: false },
+        { windowId: 10, state: "minimized", incognito: false },
       ],
       [7, 9],
     ),
@@ -25,11 +25,24 @@ test("start captures only uncovered restorable Chrome windows", () => {
 test("start remembers windows that were already minimized", () => {
   assert.deepEqual(
     findInitiallyMinimizedWindowIds([
-      { windowId: 7, state: "normal" },
-      { windowId: 8, state: "minimized" },
-      { windowId: 9, state: "minimized" },
+      { windowId: 7, state: "normal", incognito: false },
+      { windowId: 8, state: "minimized", incognito: false },
+      { windowId: 9, state: "minimized", incognito: false },
     ]),
     [8, 9],
+  );
+});
+
+test("a tab-restricted start always minimizes an Incognito window", () => {
+  assert.deepEqual(
+    chooseWindowsToMinimizeAtStart(
+      [
+        { windowId: 7, state: "normal", incognito: false },
+        { windowId: 8, state: "normal", incognito: true },
+      ],
+      [7, 8],
+    ),
+    [{ windowId: 8, previousState: "normal" }],
   );
 });
 

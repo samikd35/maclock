@@ -12,5 +12,6 @@
 - **Product policy → macOS application**: Product policy supplies an immutable session allowlist; the macOS application observes real windows and enforces that policy.
 - **macOS application → Product policy**: The macOS application reports enforcement availability and session-ending effects without adding platform objects to product policy.
 - **Product policy → Chrome extension**: Product policy supplies immutable Browser Window Targets and Tab Targets; the Chrome extension enforces their breadth and browser identities.
-- **Chrome extension ↔ Native bridge**: Each Chrome Profile establishes a validated Bridge Connection and exchanges Tab Snapshots and enforcement commands locally.
+- **Chrome extension ↔ Native bridge**: Each Chrome Profile independently establishes a validated, capability-checked Bridge Connection and exchanges Tab Snapshots and enforcement commands locally.
+- **Product policy → Chrome extension and Native bridge**: Every Chrome Profile represented in an immutable Allowlist must be Ready before start or Recovery; losing any required connection makes the complete enforcement claim untrustworthy and triggers Fail Open.
 - **Native bridge ↔ macOS application**: The Native Bridge transports messages only; the macOS application owns Session state and browser-policy decisions.

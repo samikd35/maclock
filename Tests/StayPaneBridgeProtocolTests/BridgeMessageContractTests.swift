@@ -4,7 +4,7 @@ import Testing
 
 @Test func handshakeMessageRoundTripsThroughTheVersionedContract() throws {
     let json = Data(
-        #"{"version":4,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#.utf8
+        #"{"version":5,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","capabilities":{"incognitoWindowControl":true}}"#.utf8
     )
 
     let message = try BridgeMessageCodec.decode(json)
@@ -12,7 +12,10 @@ import Testing
     #expect(
         message == .hello(
             extensionIdentifier: "hoofhoedlagpoclhkgnkmejaihaapoke",
-            profileIdentifier: "profile-one"
+            profileIdentifier: "profile-one",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     #expect(try BridgeMessageCodec.decode(BridgeMessageCodec.encode(message)) == message)
@@ -156,14 +159,16 @@ import Testing
 
 @Test(arguments: [
     #"{"version":1,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#,
-    #"{"version":4,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
-    #"{"version":4,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
-    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
-    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
-    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
-    #"{"version":4,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}]}"#,
-    #"{"version":4,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"window","windowId":9},{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"https://example.com"}}]}"#,
-    #"{"version":4,"type":"unknown"}"#
+    #"{"version":5,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
+    #"{"version":5,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","capabilities":{"incognitoWindowControl":"yes"}}"#,
+    #"{"version":5,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","capabilities":{"incognitoWindowControl":true,"extra":true}}"#,
+    #"{"version":5,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
+    #"{"version":5,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
+    #"{"version":5,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
+    #"{"version":5,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
+    #"{"version":5,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}]}"#,
+    #"{"version":5,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"window","windowId":9},{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"https://example.com"}}]}"#,
+    #"{"version":5,"type":"unknown"}"#
 ])
 func malformedNativeMessagesAreRejected(_ json: String) {
     #expect(throws: BridgeProtocolError.self) {
@@ -190,7 +195,7 @@ func malformedNativeMessagesAreRejected(_ json: String) {
 }
 
 @Test func nativeFramingWaitsForCompleteMessagesAndRejectsOversizeInput() throws {
-    let payload = Data(#"{"version":4,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
+    let payload = Data(#"{"version":5,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
     let framed = try NativeMessageFramer.frame(payload)
     var incomplete = Data(framed.dropLast())
 

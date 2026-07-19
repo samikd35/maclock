@@ -14,7 +14,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -161,7 +164,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -282,7 +288,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -429,7 +438,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: "profile-late"
+            profileIdentifier: "profile-late",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     #expect(
@@ -472,6 +484,97 @@ import Testing
 }
 
 @MainActor
+@Test func recoveryWaitsForEverySelectedChromeProfile() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let firstTarget = try savedBrowserTarget(
+        profileIdentifier: "profile-recovery-first",
+        tabIdentifier: 11,
+        windowIdentifier: 101
+    )
+    let secondTarget = try savedBrowserTarget(
+        profileIdentifier: "profile-recovery-second",
+        tabIdentifier: 22,
+        windowIdentifier: 202
+    )
+    let firstClient = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-recovery-first",
+        tabIdentifier: 11,
+        windowIdentifier: 101
+    )
+
+    #expect(
+        try controller.resume(
+            allowing: enforcementTargets([firstTarget, secondTarget])
+        ) == .awaitingAvailability
+    )
+
+    let secondClient = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-recovery-second",
+        tabIdentifier: 22,
+        windowIdentifier: 202
+    )
+    #expect(
+        try controller.resume(
+            allowing: enforcementTargets([firstTarget, secondTarget])
+        ) == .awaitingConfirmation
+    )
+    #expect(
+        try firstClient.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: "profile-recovery-first",
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 11,
+                        windowIdentifier: 101,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://example.com"
+                        )
+                    )
+                ]
+            )
+    )
+    #expect(
+        try secondClient.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: "profile-recovery-second",
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 22,
+                        windowIdentifier: 202,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://example.com"
+                        )
+                    )
+                ]
+            )
+    )
+
+    try firstClient.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-recovery-first",
+            tabIdentifiers: [11]
+        )
+    )
+    try secondClient.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-recovery-second",
+            tabIdentifiers: [22]
+        )
+    )
+    try controller.poll()
+    #expect(
+        try controller.resume(
+            allowing: enforcementTargets([firstTarget, secondTarget])
+        ) == .active
+    )
+}
+
+@MainActor
 @Test func recoveryResumesRemainingTabsAfterASelectedTabWasClosed() throws {
     let socketURL = temporaryBridgeSocketURL()
     let controller = try NativeBridgeController(socketURL: socketURL)
@@ -491,7 +594,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -576,7 +682,10 @@ import Testing
     try client.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -629,31 +738,311 @@ import Testing
 }
 
 @MainActor
-@Test func ticketEightAcceptsOnlyOneChromeProfileConnection() throws {
+@Test func selectedChromeProfilesStartOnlyAfterIndependentConfirmation() throws {
     let socketURL = temporaryBridgeSocketURL()
     let controller = try NativeBridgeController(socketURL: socketURL)
     let firstClient = try LocalBridgeClient(socketURL: socketURL)
+    let secondClient = try LocalBridgeClient(socketURL: socketURL)
     try firstClient.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: "profile-first"
+            profileIdentifier: "profile-first",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
     _ = try firstClient.readNextMessage()
     _ = try firstClient.readNextMessage()
-
-    let secondClient = try LocalBridgeClient(socketURL: socketURL)
     try secondClient.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: "profile-second"
+            profileIdentifier: "profile-second",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
+        )
+    )
+    try controller.poll()
+    _ = try secondClient.readNextMessage()
+    _ = try secondClient.readNextMessage()
+
+    for (client, profile, tabID) in [
+        (firstClient, "profile-first", 11),
+        (secondClient, "profile-second", 11),
+    ] {
+        try client.send(
+            .tabsSnapshot(
+                profileIdentifier: profile,
+                tabs: [
+                    BridgeTabSnapshot(
+                        tabIdentifier: tabID,
+                        windowIdentifier: tabID,
+                        title: "Work",
+                        url: "https://example.com/work",
+                        faviconDataURL: nil,
+                        isActive: true,
+                        isIncognito: false
+                    )
+                ]
+            )
+        )
+    }
+    try controller.poll()
+    let chrome = ApplicationTarget(
+        displayName: "Google Chrome",
+        bundleIdentifier: "com.google.Chrome"
+    )
+    let targets = controller.tabTargets(for: chrome)
+
+    #expect(controller.profileConnections.map(\.availability) == [.ready, .ready])
+    #expect(targets.count == 2)
+    #expect(
+        try controller.start(allowing: enforcementTargets(targets))
+            == .awaitingConfirmation
+    )
+    #expect(
+        try firstClient.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: "profile-first",
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 11,
+                        windowIdentifier: 11,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://example.com/work"
+                        )
+                    )
+                ]
+            )
+    )
+    #expect(
+        try secondClient.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: "profile-second",
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 11,
+                        windowIdentifier: 11,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://example.com/work"
+                        )
+                    )
+                ]
+            )
+    )
+
+    try firstClient.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-first",
+            tabIdentifiers: [11]
+        )
+    )
+    try controller.poll()
+    #expect(
+        try controller.start(allowing: enforcementTargets(targets))
+            == .awaitingConfirmation
+    )
+    try secondClient.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-second",
+            tabIdentifiers: [11]
+        )
+    )
+    try controller.poll()
+    #expect(
+        try controller.start(allowing: enforcementTargets(targets)) == .active
+    )
+
+    controller.stop()
+    #expect(
+        try firstClient.readNextMessage()
+            == .endEnforcement(profileIdentifier: "profile-first")
+    )
+    #expect(
+        try secondClient.readNextMessage()
+            == .endEnforcement(profileIdentifier: "profile-second")
+    )
+}
+
+@MainActor
+@Test func profileWithoutIncognitoWindowControlIsUnsupported() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    let profile = BrowserProfileIdentifier(rawValue: "profile-unsupported")
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: profile.rawValue,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: false
+            )
         )
     )
     try controller.poll()
 
-    #expect(controller.isConnected)
-    #expect(try secondClient.readNextMessage() == nil)
+    #expect(
+        controller.profileConnections == [
+            BrowserProfileConnection(
+                profileIdentifier: profile,
+                availability: .incognitoWindowControlRequired
+            )
+        ]
+    )
+    #expect(
+        try client.readNextMessage()
+            == .helloAcknowledged(profileIdentifier: profile.rawValue)
+    )
+    #expect(
+        try client.readNextMessage()
+            == .requestTabs(profileIdentifier: profile.rawValue)
+    )
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profile.rawValue,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 41,
+                    windowIdentifier: 14,
+                    title: "Unavailable tab",
+                    url: "https://example.com",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    try controller.poll()
+    let chrome = ApplicationTarget(
+        displayName: "Google Chrome",
+        bundleIdentifier: "com.google.Chrome"
+    )
+    #expect(controller.windowTargets(for: chrome).isEmpty)
+    #expect(controller.tabTargets(for: chrome).isEmpty)
+
+    let target = try savedBrowserTarget(
+        profileIdentifier: profile.rawValue
+    )
+    #expect(throws: NativeBridgeError.unsupportedProfile(profile)) {
+        try controller.preflight(targets: enforcementTargets([target]))
+    }
+}
+
+@MainActor
+@Test func readyProfileRequiresItsFirstSnapshotAfterReconnect() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: "profile-synchronizing",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
+        )
+    )
+    try controller.poll()
+    #expect(controller.profileConnections.map(\.availability) == [.synchronizing])
+
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: "profile-synchronizing",
+            tabs: []
+        )
+    )
+    try controller.poll()
+    #expect(controller.profileConnections.map(\.availability) == [.ready])
+}
+
+@MainActor
+@Test func connectionCannotSendMessagesForAnotherChromeProfile() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-verified",
+        tabIdentifier: 11,
+        windowIdentifier: 101
+    )
+
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: "profile-spoofed",
+            tabs: []
+        )
+    )
+    try controller.poll()
+
+    #expect(!controller.isConnected)
+    #expect(controller.profileConnections.isEmpty)
+}
+
+@MainActor
+@Test func losingOneRequiredProfileStopsEverySurvivingProfile() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    var firstClient: LocalBridgeClient? = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-loss-first",
+        tabIdentifier: 11,
+        windowIdentifier: 101
+    )
+    let secondClient = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-loss-second",
+        tabIdentifier: 22,
+        windowIdentifier: 202
+    )
+    let targets = try enforcementTargets([
+        savedBrowserTarget(
+            profileIdentifier: "profile-loss-first",
+            tabIdentifier: 11,
+            windowIdentifier: 101
+        ),
+        savedBrowserTarget(
+            profileIdentifier: "profile-loss-second",
+            tabIdentifier: 22,
+            windowIdentifier: 202
+        ),
+    ])
+
+    #expect(try controller.start(allowing: targets) == .awaitingConfirmation)
+    _ = try firstClient?.readNextMessage()
+    _ = try secondClient.readNextMessage()
+    try firstClient?.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-loss-first",
+            tabIdentifiers: [11]
+        )
+    )
+    try secondClient.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-loss-second",
+            tabIdentifiers: [22]
+        )
+    )
+    try controller.poll()
+    #expect(try controller.start(allowing: targets) == .active)
+
+    firstClient = nil
+    try controller.poll()
+    #expect(throws: NativeBridgeError.disconnected) {
+        try controller.refresh()
+    }
+    controller.stop()
+    #expect(
+        try secondClient.readNextMessage()
+            == .endEnforcement(profileIdentifier: "profile-loss-second")
+    )
 }
 
 @MainActor
@@ -666,7 +1055,10 @@ import Testing
     try client?.send(
         .hello(
             extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-            profileIdentifier: profileIdentifier
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
         )
     )
     try controller.poll()
@@ -716,6 +1108,81 @@ import Testing
     #expect(throws: NativeBridgeError.disconnected) {
         try controller.refresh()
     }
+
+    controller.stop()
+    let reconnected = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: profileIdentifier,
+        tabIdentifier: 8,
+        windowIdentifier: 3
+    )
+    try controller.refresh()
+    reconnected.finishSending()
+    try controller.poll()
+    #expect(try reconnected.readNextMessage() == nil)
+}
+
+@MainActor
+@Test func replacingAnActiveProfileConnectionFailsOpen() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let original = try connectReadyProfile(
+        to: socketURL,
+        controller: controller,
+        profileIdentifier: "profile-replaced",
+        tabIdentifier: 8,
+        windowIdentifier: 3
+    )
+    let target = try savedBrowserTarget(
+        profileIdentifier: "profile-replaced",
+        tabIdentifier: 8,
+        windowIdentifier: 3
+    )
+    #expect(
+        try controller.start(allowing: enforcementTargets([target]))
+            == .awaitingConfirmation
+    )
+    _ = try original.readNextMessage()
+    try original.send(
+        .enforcementStarted(
+            profileIdentifier: "profile-replaced",
+            tabIdentifiers: [8]
+        )
+    )
+    try controller.poll()
+    #expect(
+        try controller.start(allowing: enforcementTargets([target])) == .active
+    )
+
+    let replacement = try LocalBridgeClient(socketURL: socketURL)
+    try replacement.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: "profile-replaced",
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
+        )
+    )
+    try controller.poll()
+
+    #expect(throws: NativeBridgeError.disconnected) {
+        try controller.refresh()
+    }
+    #expect(
+        try replacement.readNextMessage()
+            == .helloAcknowledged(profileIdentifier: "profile-replaced")
+    )
+    #expect(
+        try replacement.readNextMessage()
+            == .requestTabs(profileIdentifier: "profile-replaced")
+    )
+    controller.stop()
+    #expect(
+        try replacement.readNextMessage()
+            == .endEnforcement(profileIdentifier: "profile-replaced")
+    )
 }
 
 private func temporaryBridgeSocketURL() -> URL {
@@ -749,4 +1216,45 @@ private func enforcementTargets(
     _ tabs: [BrowserTabTarget]
 ) -> [BrowserEnforcementTarget] {
     tabs.map(BrowserEnforcementTarget.tab)
+}
+
+@MainActor
+private func connectReadyProfile(
+    to socketURL: URL,
+    controller: NativeBridgeController,
+    profileIdentifier: String,
+    tabIdentifier: Int,
+    windowIdentifier: Int
+) throws -> LocalBridgeClient {
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: profileIdentifier,
+            capabilities: BridgeProfileCapabilities(
+                incognitoWindowControl: true
+            )
+        )
+    )
+    try controller.poll()
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profileIdentifier,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: tabIdentifier,
+                    windowIdentifier: windowIdentifier,
+                    title: "Recovered tab",
+                    url: "https://example.com",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    try controller.poll()
+    return client
 }

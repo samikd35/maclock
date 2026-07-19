@@ -6,7 +6,7 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 
 1. Run `make app`, `make test`, and `make test-extension` from the repository root.
 2. Open `.build/StayPane.app`, register the Native Host, and confirm the Chrome companion is connected.
-3. In `chrome://extensions`, reload **StayPane Chrome Companion** after every rebuild. Version 0.4.0 speaks Native Bridge protocol version 4; an older loaded build cannot start the current browser-enforcement contract.
+3. In `chrome://extensions`, reload **StayPane Chrome Companion** after every rebuild. Version 0.5.0 speaks Native Bridge protocol version 5; an older loaded build cannot start the current browser-enforcement contract. Enable **Allow in Incognito** so the profile is Ready.
 4. Pin the extension if you want to observe its brief orange `SITE` badge.
 
 ## Scope presentation and eligibility
@@ -47,5 +47,5 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 ## Automated and privacy checks
 
 1. Run `make test-extension`. Policy and adapter tests cover schemes, exact hostnames, paths, queries, fragments, ports, redirects, top-level frames, rapid blocks, Last Allowed Page, same-scope transfers, cross-scope closes, immutable tab identity, and serialized stop races.
-2. Run `make test`. Swift tests cover the default Current Website scope, backward-compatible Recovery decoding, strict protocol version 4 messages, content-free Blocked Navigation notices, web-tab eligibility, and real local socket delivery.
+2. Run `make test`. Swift tests cover the default Current Website scope, backward-compatible Recovery decoding, strict protocol version 5 messages, content-free Blocked Navigation notices, web-tab eligibility, and real local socket delivery.
 3. Inspect extension storage and Native Bridge traffic. Active local enforcement may contain its exact Tab Target and Current Website URL, but completed Session History and exported Diagnostics must contain no tab title, URL, hostname, or domain.

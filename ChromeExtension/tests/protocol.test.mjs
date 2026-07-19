@@ -15,18 +15,23 @@ import {
 } from "../dist/protocol.js";
 
 test("creates the fixed identity handshake", () => {
-  assert.equal(PROTOCOL_VERSION, 4);
-  assert.deepEqual(makeHello("profile_one"), {
+  assert.equal(PROTOCOL_VERSION, 5);
+  assert.deepEqual(makeHello("profile_one", {
+    incognitoWindowControl: true,
+  }), {
     version: PROTOCOL_VERSION,
     type: "hello",
     extensionId: EXTENSION_ID,
     profileId: "profile_one",
+    capabilities: {
+      incognitoWindowControl: true,
+    },
   });
 });
 
 test("creates a content-free blocked navigation notice", () => {
   assert.deepEqual(makeBlockedNavigation("profile_one", 41), {
-    version: 4,
+    version: 5,
     type: "blockedNavigation",
     profileId: "profile_one",
     tabId: 41,
@@ -35,7 +40,7 @@ test("creates a content-free blocked navigation notice", () => {
 
 test("identifies the Available Tab Target for a blocked activation", () => {
   assert.deepEqual(makeBlockedTabActivation("profile_one", 90, 41), {
-    version: 4,
+    version: 5,
     type: "blockedTabActivation",
     profileId: "profile_one",
     attemptedTabId: 90,
@@ -45,7 +50,7 @@ test("identifies the Available Tab Target for a blocked activation", () => {
 
 test("confirms atomic enforcement with broad windows and exact tabs", () => {
   assert.deepEqual(makeEnforcementStarted("profile_one", [9], [41, 42]), {
-    version: 4,
+    version: 5,
     type: "enforcementStarted",
     profileId: "profile_one",
     windowIds: [9],
@@ -55,7 +60,7 @@ test("confirms atomic enforcement with broad windows and exact tabs", () => {
 
 test("creates a content-free closed browser window notice", () => {
   assert.deepEqual(makeBrowserWindowTargetClosed("profile_one", 9), {
-    version: 4,
+    version: 5,
     type: "browserWindowTargetClosed",
     profileId: "profile_one",
     windowId: 9,
@@ -64,7 +69,7 @@ test("creates a content-free closed browser window notice", () => {
 
 test("creates a content-free closed target notice", () => {
   assert.deepEqual(makeTabTargetClosed("profile_one", 41), {
-    version: 4,
+    version: 5,
     type: "tabTargetClosed",
     profileId: "profile_one",
     tabId: 41,
@@ -73,7 +78,7 @@ test("creates a content-free closed target notice", () => {
 
 test("reports a loading selected tab without browsing content", () => {
   assert.deepEqual(makeEnforcementError("profile_one", "targetNotReady"), {
-    version: 4,
+    version: 5,
     type: "enforcementError",
     profileId: "profile_one",
     code: "targetNotReady",
@@ -101,7 +106,7 @@ test("drops optional favicon data before exceeding the native message budget", (
   assert.equal(tabs[0].faviconDataUrl, undefined);
   assert.ok(
     new TextEncoder().encode(JSON.stringify({
-      version: 4,
+      version: 5,
       type: "tabsSnapshot",
       profileId: "profile_one",
       tabs,
@@ -111,7 +116,7 @@ test("drops optional favicon data before exceeding the native message budget", (
 
 test("accepts one atomic broad-window and mixed-scope command", () => {
   const command = {
-    version: 4,
+    version: 5,
     type: "beginEnforcement",
     profileId: "profile_one",
     targets: [
@@ -147,19 +152,19 @@ test("rejects malformed, duplicate, extra, and unsupported commands", () => {
   for (const value of [
     { version: 3, type: "endEnforcement", profileId: "profile_one" },
     {
-      version: 4,
+      version: 5,
       type: "endEnforcement",
       profileId: "profile_one",
       extra: true,
     },
     {
-      version: 4,
+      version: 5,
       type: "beginEnforcement",
       profileId: "bad profile",
       targets: [],
     },
     {
-      version: 4,
+      version: 5,
       type: "beginEnforcement",
       profileId: "profile_one",
       targets: [{
@@ -173,7 +178,7 @@ test("rejects malformed, duplicate, extra, and unsupported commands", () => {
       }],
     },
     {
-      version: 4,
+      version: 5,
       type: "beginEnforcement",
       profileId: "profile_one",
       targets: [
@@ -198,7 +203,7 @@ test("rejects malformed, duplicate, extra, and unsupported commands", () => {
       ],
     },
     {
-      version: 4,
+      version: 5,
       type: "beginEnforcement",
       profileId: "profile_one",
       targets: [
@@ -214,7 +219,7 @@ test("rejects malformed, duplicate, extra, and unsupported commands", () => {
         },
       ],
     },
-    { version: 4, type: "unknown", profileId: "profile_one" },
+    { version: 5, type: "unknown", profileId: "profile_one" },
   ]) {
     assert.throws(() => parseNativeMessage(value));
   }

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum StayPaneBridgeConstants {
-    public static let protocolVersion = 4
+    public static let protocolVersion = 5
     public static let nativeHostName = "com.staypane.native_bridge"
     public static let extensionIdentifier = "hoofhoedlagpoclhkgnkmejaihaapoke"
     public static let allowedOrigin = "chrome-extension://\(extensionIdentifier)/"
@@ -43,6 +43,14 @@ public enum BridgeProtocolError: Error, Equatable, Sendable {
 public enum BridgeMessageDirection: Equatable, Sendable {
     case extensionToNative
     case nativeToExtension
+}
+
+public struct BridgeProfileCapabilities: Equatable, Sendable {
+    public let incognitoWindowControl: Bool
+
+    public init(incognitoWindowControl: Bool) {
+        self.incognitoWindowControl = incognitoWindowControl
+    }
 }
 
 public struct BridgeWindowBounds: Equatable, Sendable {
@@ -98,7 +106,11 @@ public enum BridgeEnforcementErrorCode: String, Equatable, Sendable {
 }
 
 public enum BridgeMessage: Equatable, Sendable {
-    case hello(extensionIdentifier: String, profileIdentifier: String)
+    case hello(
+        extensionIdentifier: String,
+        profileIdentifier: String,
+        capabilities: BridgeProfileCapabilities
+    )
     case helloAcknowledged(profileIdentifier: String)
     case tabsSnapshot(profileIdentifier: String, tabs: [BridgeTabSnapshot])
     case tabActivated(
@@ -190,7 +202,10 @@ public enum BridgeMessageCodec {
         case "hello":
             try requireKeys(
                 dictionary,
-                exactly: ["version", "type", "extensionId", "profileId"]
+                exactly: [
+                    "version", "type", "extensionId", "profileId",
+                    "capabilities"
+                ]
             )
             guard let extensionIdentifier = validatedString(
                 dictionary["extensionId"],
@@ -202,7 +217,10 @@ public enum BridgeMessageCodec {
             }
             return .hello(
                 extensionIdentifier: extensionIdentifier,
-                profileIdentifier: profileIdentifier
+                profileIdentifier: profileIdentifier,
+                capabilities: try decodeProfileCapabilities(
+                    dictionary["capabilities"]
+                )
             )
 
         case "helloAck":
@@ -373,11 +391,19 @@ public enum BridgeMessageCodec {
             "version": StayPaneBridgeConstants.protocolVersion
         ]
         switch message {
-        case let .hello(extensionIdentifier, profileIdentifier):
+        case let .hello(
+            extensionIdentifier,
+            profileIdentifier,
+            capabilities
+        ):
             object.merge([
                 "type": "hello",
                 "extensionId": extensionIdentifier,
-                "profileId": profileIdentifier
+                "profileId": profileIdentifier,
+                "capabilities": [
+                    "incognitoWindowControl": capabilities
+                        .incognitoWindowControl
+                ]
             ]) { _, new in new }
         case let .helloAcknowledged(profileIdentifier):
             object.merge([
@@ -521,6 +547,26 @@ public enum BridgeMessageCodec {
             windowBounds: windowBounds,
             isActive: isActive,
             isIncognito: isIncognito
+        )
+    }
+
+    private static func decodeProfileCapabilities(
+        _ value: Any?
+    ) throws -> BridgeProfileCapabilities {
+        guard let dictionary = value as? [String: Any] else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        try requireKeys(
+            dictionary,
+            exactly: ["incognitoWindowControl"]
+        )
+        guard let incognitoWindowControl = dictionary[
+            "incognitoWindowControl"
+        ] as? Bool else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        return BridgeProfileCapabilities(
+            incognitoWindowControl: incognitoWindowControl
         )
     }
 

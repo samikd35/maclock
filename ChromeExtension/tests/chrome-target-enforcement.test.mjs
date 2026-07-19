@@ -627,6 +627,56 @@ test("an uncovered Chrome window is minimized and restored on stop", async () =>
   assert.equal(await loadStoredChromeTargetState(harness.store), null);
 });
 
+test("a blocked window recorded at start is minimized again after restoration", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.minimizedWindows = [
+    { windowId: 12, previousState: "normal" },
+  ];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+    windowId: 12,
+  });
+
+  assert.deepEqual(harness.minimizedWindows, [12]);
+  assert.deepEqual(
+    (await loadStoredChromeTargetState(harness.store)).minimizedWindows,
+    [{ windowId: 12, previousState: "normal" }],
+  );
+  await harness.enforcer.stop();
+  assert.deepEqual(harness.restoredWindows, [[12, "normal"]]);
+});
+
+test("a blocked window is minimized when every browser target has closed", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [];
+  enforcement.availableTargets = [];
+  enforcement.lastActivatedTarget = null;
+  enforcement.minimizedWindows = [
+    { windowId: 12, previousState: "normal" },
+  ];
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+    windowId: 12,
+  });
+
+  assert.deepEqual(harness.minimizedWindows, [12]);
+  assert.deepEqual(harness.closedTabs, [99]);
+  assert.deepEqual(
+    (await loadStoredChromeTargetState(harness.store)).minimizedWindows,
+    [{ windowId: 12, previousState: "normal" }],
+  );
+});
+
 test("a window minimized before start is reblocked without being restored", async () => {
   const harness = makeHarness();
   const enforcement = makeEnforcement();

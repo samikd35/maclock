@@ -5,6 +5,20 @@ import StayPaneBridgeProtocol
 import StayPaneCore
 import UniformTypeIdentifiers
 
+enum BrowserProfilePresentationAvailability: Equatable {
+    case synchronizing
+    case ready
+    case disconnected
+    case incognitoWindowControlRequired
+}
+
+struct BrowserProfilePresentation: Equatable, Identifiable {
+    let profileIdentifier: BrowserProfileIdentifier
+    let availability: BrowserProfilePresentationAvailability
+
+    var id: BrowserProfileIdentifier { profileIdentifier }
+}
+
 @MainActor
 final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandling {
     static let lastDurationKey = "lastSessionDurationSeconds"
@@ -22,6 +36,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         String: [BrowserWindowTarget]
     ] = [:]
     @Published private(set) var nativeBridgeConnected = false
+    @Published private(set) var browserProfiles: [BrowserProfilePresentation] = []
     @Published private(set) var nativeHostRegistered = false
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
     @Published var expandedApplicationIDs: Set<String> = []
@@ -265,6 +280,36 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         })
     }
 
+    var selectedBrowserProfileIdentifiers: Set<BrowserProfileIdentifier> {
+        Set(configuredTargets.compactMap { target in
+            switch target {
+            case let .browserWindow(window):
+                window.profileIdentifier
+            case let .browserTab(tab):
+                tab.profileIdentifier
+            case .application, .window:
+                nil
+            }
+        })
+    }
+
+    var selectedBrowserProfiles: [BrowserProfilePresentation] {
+        browserProfiles.filter {
+            selectedBrowserProfileIdentifiers.contains($0.profileIdentifier)
+        }
+    }
+
+    private var selectedBrowserIntegrationsReady: Bool {
+        let selected = selectedBrowserProfileIdentifiers
+        guard !selected.isEmpty else {
+            return true
+        }
+        let ready = Set(browserProfiles.compactMap { profile in
+            profile.availability == .ready ? profile.profileIdentifier : nil
+        })
+        return selected.isSubset(of: ready)
+    }
+
     var configuredTargets: [SessionTarget] {
         switch engine.state {
         case let .configuring(draft), let .ready(draft):
@@ -282,8 +327,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                     $0.id == target.bundleIdentifier
                 })?.isAvailable == true
             }
-            && (selectedBrowserWindowIDs.isEmpty
-                && selectedBrowserTabIDs.isEmpty || nativeBridgeConnected)
+            && selectedBrowserIntegrationsReady
             && SessionDuration(seconds: durationSeconds) != nil
     }
 
@@ -508,6 +552,17 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func isChromeApplication(_ applicationID: String) -> Bool {
         applicationID == "com.google.Chrome"
+    }
+
+    func browserProfileLabel(
+        _ profileIdentifier: BrowserProfileIdentifier
+    ) -> String {
+        let sortedIdentifiers = browserProfiles.map(\.profileIdentifier)
+        guard let index = sortedIdentifiers.firstIndex(of: profileIdentifier)
+        else {
+            return "Chrome Profile"
+        }
+        return "Chrome Profile \(index + 1)"
     }
 
     func registerNativeHost() {
@@ -1120,6 +1175,37 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func synchronizeBrowserPresentation() {
         nativeBridgeConnected = nativeBridge?.isConnected == true
+        var profilePresentations = Dictionary(
+            uniqueKeysWithValues: (nativeBridge?.profileConnections ?? []).map {
+                connection in
+                let availability: BrowserProfilePresentationAvailability =
+                    switch connection.availability {
+                    case .synchronizing:
+                        .synchronizing
+                    case .ready:
+                        .ready
+                    case .incognitoWindowControlRequired:
+                        .incognitoWindowControlRequired
+                    }
+                return (
+                    connection.profileIdentifier,
+                    BrowserProfilePresentation(
+                        profileIdentifier: connection.profileIdentifier,
+                        availability: availability
+                    )
+                )
+            }
+        )
+        for profileIdentifier in selectedBrowserProfileIdentifiers
+            where profilePresentations[profileIdentifier] == nil {
+            profilePresentations[profileIdentifier] = BrowserProfilePresentation(
+                profileIdentifier: profileIdentifier,
+                availability: .disconnected
+            )
+        }
+        browserProfiles = profilePresentations.values.sorted {
+            $0.profileIdentifier.rawValue < $1.profileIdentifier.rawValue
+        }
         var refreshedTabs: [String: [BrowserTabTarget]] = [:]
         var refreshedWindows: [String: [BrowserWindowTarget]] = [:]
         for application in applications
@@ -1149,7 +1235,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                         engine.select(target: .browserWindow(live))
                         didChangeSelection = true
                     }
-                } else {
+                } else if profilePresentations[selected.profileIdentifier]?
+                    .availability == .ready {
                     engine.deselectTarget(selected.targetIdentifier)
                     didChangeSelection = true
                 }

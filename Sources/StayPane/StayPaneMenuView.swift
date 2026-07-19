@@ -290,6 +290,30 @@ struct StayPaneMenuView: View {
             }
             .font(.caption.weight(.medium))
 
+            if model.browserProfiles.isEmpty {
+                Text("No Chrome Profile has a Bridge Connection.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.browserProfiles) { profile in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(
+                            "\(model.browserProfileLabel(profile.profileIdentifier)): \(browserProfileStatus(profile.availability))",
+                            systemImage: browserProfileStatusImage(
+                                profile.availability
+                            )
+                        )
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(
+                            browserProfileStatusColor(profile.availability)
+                        )
+                        Text(browserProfileGuidance(profile.availability))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Text("One-time local setup: complete Native Host Registration, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -331,6 +355,22 @@ struct StayPaneMenuView: View {
                         value: presentation.reviewValue,
                         systemImage: presentation.systemImage
                     )
+                }
+            }
+            ForEach(model.selectedBrowserProfiles) { profile in
+                reviewRow(
+                    title: model.browserProfileLabel(
+                        profile.profileIdentifier
+                    ),
+                    value: browserProfileStatus(profile.availability),
+                    systemImage: browserProfileStatusImage(
+                        profile.availability
+                    )
+                )
+                if profile.availability != .ready {
+                    Text(browserProfileGuidance(profile.availability))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
             if model.configuredTargets.contains(where: {
@@ -958,13 +998,26 @@ struct StayPaneMenuView: View {
             .font(.caption.weight(.semibold))
             .padding(.leading, 24)
 
-        if !model.nativeBridgeConnected {
-            Text("Connect the Chrome companion above to choose a Chrome window or individual tab.")
+        ForEach(model.browserProfiles) { profile in
+            VStack(alignment: .leading, spacing: 1) {
+                Text(
+                    "\(model.browserProfileLabel(profile.profileIdentifier)) — \(browserProfileStatus(profile.availability))"
+                )
+                .font(.caption.weight(.medium))
+                Text(browserProfileGuidance(profile.availability))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 28)
+        }
+
+        if model.browserProfiles.isEmpty {
+            Text("Connect the Chrome companion in each Chrome Profile you want to use.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 28)
         } else if model.browserWindows(for: application.id).isEmpty {
-            Text("No eligible Chrome windows reported")
+            Text("No eligible Chrome windows are available from a ready profile.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 28)
@@ -974,6 +1027,9 @@ struct StayPaneMenuView: View {
                 id: \.targetIdentifier
             ) { window in
                 VStack(alignment: .leading, spacing: 5) {
+                    Text(model.browserProfileLabel(window.profileIdentifier))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     Toggle(
                         isOn: Binding(
                             get: {
@@ -1140,6 +1196,64 @@ struct StayPaneMenuView: View {
         return application.isAvailable ? "Installed" : "Unavailable"
     }
 
+    private func browserProfileStatus(
+        _ availability: BrowserProfilePresentationAvailability
+    ) -> String {
+        switch availability {
+        case .synchronizing:
+            "Synchronizing"
+        case .ready:
+            "Ready"
+        case .disconnected:
+            "Disconnected"
+        case .incognitoWindowControlRequired:
+            "Unsupported until Incognito control is enabled"
+        }
+    }
+
+    private func browserProfileGuidance(
+        _ availability: BrowserProfilePresentationAvailability
+    ) -> String {
+        switch availability {
+        case .synchronizing:
+            "The connection is verified. StayPane is waiting for this profile's current windows and tabs."
+        case .ready:
+            "Extension identity, Native Bridge, and Incognito-window control are verified."
+        case .disconnected:
+            "Open this Chrome Profile with the StayPane companion enabled, then reconnect before starting."
+        case .incognitoWindowControlRequired:
+            "In chrome://extensions, open StayPane details and enable Allow in Incognito. Incognito tabs remain unselectable."
+        }
+    }
+
+    private func browserProfileStatusImage(
+        _ availability: BrowserProfilePresentationAvailability
+    ) -> String {
+        switch availability {
+        case .synchronizing:
+            "arrow.triangle.2.circlepath"
+        case .ready:
+            "checkmark.circle.fill"
+        case .disconnected:
+            "link.badge.plus"
+        case .incognitoWindowControlRequired:
+            "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func browserProfileStatusColor(
+        _ availability: BrowserProfilePresentationAvailability
+    ) -> Color {
+        switch availability {
+        case .ready:
+            .green
+        case .synchronizing:
+            .secondary
+        case .disconnected, .incognitoWindowControlRequired:
+            .orange
+        }
+    }
+
     private func targetNames(_ targets: [SessionTarget]) -> String {
         let names = targets.map(targetLabel)
         if names.count <= 1 {
@@ -1181,7 +1295,7 @@ struct StayPaneMenuView: View {
             TargetPresentation(
                 label: window.title,
                 reviewTitle: "Browser Window Target",
-                reviewValue: window.title,
+                reviewValue: "\(window.title) — \(model.browserProfileLabel(window.profileIdentifier))",
                 systemImage: "macwindow.on.rectangle",
                 isBroadApplication: false
             )
@@ -1189,7 +1303,7 @@ struct StayPaneMenuView: View {
             TargetPresentation(
                 label: "\(tab.title) (\(browserScopeName(tab.navigationScope))) in \(tab.application.displayName)",
                 reviewTitle: "Individual Chrome tab",
-                reviewValue: "\(tab.title) — \(browserScopeName(tab.navigationScope)): \(browserScopeValue(tab))",
+                reviewValue: "\(tab.title) — \(model.browserProfileLabel(tab.profileIdentifier)) — \(browserScopeName(tab.navigationScope)): \(browserScopeValue(tab))",
                 systemImage: "rectangle.stack",
                 isBroadApplication: false
             )

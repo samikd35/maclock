@@ -7,8 +7,8 @@ These checks exercise Chrome APIs and native messaging that cannot be proven by 
 1. Run `make app`, `make test`, and `make test-extension` from the repository root.
 2. Open `.build/StayPane.app`. In the **Chrome tab companion** card, choose **Register Native Host**.
 3. Confirm **Native Host registered** appears. The generated manifest at `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.staypane.native_bridge.json` must name the packaged `StayPaneBridge` executable and allow only `chrome-extension://hoofhoedlagpoclhkgnkmejaihaapoke/`.
-4. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `.build/StayPane.app/Contents/Resources/ChromeExtension`. Confirm Chrome shows extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
-5. Return to StayPane. Confirm the card changes from **Disconnected** to **Connected**. If Chrome was already open, reload the extension once after bridge registration.
+4. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `.build/StayPane.app/Contents/Resources/ChromeExtension`. Confirm Chrome shows version 0.5.0 and extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`, then open its details and enable **Allow in Incognito**.
+5. Return to StayPane. Confirm the profile changes from **Synchronizing** to **Ready** after its current windows and tabs arrive. If Chrome was already open, reload the extension once after bridge registration.
 
 No Apple or Google paid developer account is part of this source-build flow. Rebuilding keeps the same unpacked extension identity because the public manifest key is fixed in source.
 

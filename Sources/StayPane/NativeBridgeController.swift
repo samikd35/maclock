@@ -4,6 +4,8 @@ import StayPaneCore
 
 enum NativeBridgeError: Error, Equatable {
     case disconnected
+    case profileSynchronizing(BrowserProfileIdentifier)
+    case unsupportedProfile(BrowserProfileIdentifier)
     case targetMissing
     case startConfirmationTimedOut
     case extensionReported(BridgeEnforcementErrorCode)
@@ -14,6 +16,10 @@ extension NativeBridgeError: LocalizedError {
         switch self {
         case .disconnected:
             "The StayPane Chrome extension is disconnected. Connect it before starting a Session with a Browser Window Target or Tab Target."
+        case .profileSynchronizing:
+            "This Chrome Profile is still synchronizing. Wait for its current windows and tabs before starting."
+        case .unsupportedProfile:
+            "This Chrome Profile cannot control Incognito windows. Enable Allow in Incognito for the StayPane companion before selecting browser targets."
         case .targetMissing:
             "A selected Chrome window or tab is no longer available. Refresh and choose an open target."
         case .startConfirmationTimedOut:
@@ -28,6 +34,19 @@ extension NativeBridgeError: LocalizedError {
     }
 }
 
+enum BrowserProfileAvailability: Equatable {
+    case synchronizing
+    case ready
+    case incognitoWindowControlRequired
+}
+
+struct BrowserProfileConnection: Equatable, Identifiable {
+    let profileIdentifier: BrowserProfileIdentifier
+    let availability: BrowserProfileAvailability
+
+    var id: BrowserProfileIdentifier { profileIdentifier }
+}
+
 @MainActor
 final class NativeBridgeController: BrowserEnforcing {
     private static let recoveryAvailabilityTimeout: TimeInterval = 5
@@ -35,13 +54,19 @@ final class NativeBridgeController: BrowserEnforcing {
     private struct BrowserEnforcementPlan: Equatable {
         let configuredTargets: [BrowserEnforcementTarget]
         var availableTargets: [BrowserEnforcementTarget]
+        var confirmedProfiles: Set<BrowserProfileIdentifier> = []
 
-        var profileIdentifier: BrowserProfileIdentifier? {
-            configuredTargets.first?.profileIdentifier
+        var profileIdentifiers: Set<BrowserProfileIdentifier> {
+            Set(configuredTargets.map(\.profileIdentifier))
         }
 
-        var availableWindowIdentifiers: Set<Int> {
+        func availableWindowIdentifiers(
+            for profileIdentifier: BrowserProfileIdentifier
+        ) -> Set<Int> {
             Set(availableTargets.compactMap { target in
+                guard target.profileIdentifier == profileIdentifier else {
+                    return nil
+                }
                 guard case let .window(window) = target else {
                     return nil
                 }
@@ -49,13 +74,35 @@ final class NativeBridgeController: BrowserEnforcing {
             })
         }
 
-        var availableTabIdentifiers: Set<Int> {
+        func availableTabIdentifiers(
+            for profileIdentifier: BrowserProfileIdentifier
+        ) -> Set<Int> {
             Set(availableTargets.compactMap { target in
+                guard target.profileIdentifier == profileIdentifier else {
+                    return nil
+                }
                 guard case let .tab(tab) = target else {
                     return nil
                 }
                 return tab.tabIdentifier.rawValue
             })
+        }
+
+        func availableTargets(
+            for profileIdentifier: BrowserProfileIdentifier
+        ) -> [BrowserEnforcementTarget] {
+            availableTargets.filter {
+                $0.profileIdentifier == profileIdentifier
+            }
+        }
+
+        func containsAvailableTab(
+            profileIdentifier: BrowserProfileIdentifier,
+            tabIdentifier: Int
+        ) -> Bool {
+            availableTabIdentifiers(for: profileIdentifier).contains(
+                tabIdentifier
+            )
         }
 
         mutating func removeAvailableTarget(
@@ -95,6 +142,10 @@ final class NativeBridgeController: BrowserEnforcing {
     private var connectionByProfile: [
         BrowserProfileIdentifier: BridgeConnectionIdentifier
     ] = [:]
+    private var capabilitiesByProfile: [
+        BrowserProfileIdentifier: BridgeProfileCapabilities
+    ] = [:]
+    private var profilesWithSnapshot: Set<BrowserProfileIdentifier> = []
     private var tabsByProfile: [
         BrowserProfileIdentifier: [BridgeTabSnapshot]
     ] = [:]
@@ -120,8 +171,22 @@ final class NativeBridgeController: BrowserEnforcing {
         !connectionByProfile.isEmpty
     }
 
+    var profileConnections: [BrowserProfileConnection] {
+        connectionByProfile.keys.map { profileIdentifier in
+            BrowserProfileConnection(
+                profileIdentifier: profileIdentifier,
+                availability: profileAvailability(profileIdentifier)
+                    ?? .synchronizing
+            )
+        }
+        .sorted {
+            $0.profileIdentifier.rawValue < $1.profileIdentifier.rawValue
+        }
+    }
+
     func tabTargets(for application: ApplicationTarget) -> [BrowserTabTarget] {
         tabsByProfile
+            .filter { profileAvailability($0.key) == .ready }
             .flatMap { profileIdentifier, tabs in
                 tabs.compactMap { tab -> BrowserTabTarget? in
                     guard !tab.isIncognito,
@@ -158,6 +223,7 @@ final class NativeBridgeController: BrowserEnforcing {
         for application: ApplicationTarget
     ) -> [BrowserWindowTarget] {
         tabsByProfile
+            .filter { profileAvailability($0.key) == .ready }
             .flatMap { profileIdentifier, tabs in
                 Dictionary(
                     grouping: tabs.filter { !$0.isIncognito },
@@ -221,7 +287,7 @@ final class NativeBridgeController: BrowserEnforcing {
 
     func preflight(targets: [BrowserEnforcementTarget]) throws {
         try poll()
-        _ = try selectedProfile(for: targets)
+        _ = try selectedProfiles(for: targets)
         for target in targets {
             try validateAvailable(target)
         }
@@ -243,16 +309,9 @@ final class NativeBridgeController: BrowserEnforcing {
             return result
         }
         stop()
-
-        let profileIdentifier = targets[0].profileIdentifier
-        guard let connection = connectionByProfile[profileIdentifier] else {
-            throw NativeBridgeError.disconnected
-        }
         return try beginEnforcement(
             configuredTargets: targets,
-            availableTargets: targets,
-            profileIdentifier: profileIdentifier,
-            connection: connection
+            availableTargets: targets
         )
     }
 
@@ -279,21 +338,27 @@ final class NativeBridgeController: BrowserEnforcing {
             recoveryAvailabilityDeadline = availabilityDeadline
         }
 
-        guard let profileIdentifier = try selectedProfile(for: targets),
-              let connection = connectionByProfile[profileIdentifier]
-        else {
-            return try awaitRecoveryAvailability(orThrow: .disconnected)
+        let profileIdentifiers = try selectedProfiles(for: targets)
+        if let unavailableProfile = profileIdentifiers.first(where: {
+            profileAvailability($0) != .ready
+        }) {
+            return try awaitRecoveryAvailability(
+                orThrow: recoveryError(for: unavailableProfile)
+            )
         }
         let availableTargets = targets.filter(isAvailable)
-        guard !availableTargets.isEmpty else {
+        let availableProfiles = Set(
+            availableTargets.map(\.profileIdentifier)
+        )
+        guard !availableTargets.isEmpty,
+              availableProfiles == profileIdentifiers
+        else {
             return try awaitRecoveryAvailability(orThrow: .targetMissing)
         }
 
         let result = try beginEnforcement(
             configuredTargets: targets,
-            availableTargets: availableTargets,
-            profileIdentifier: profileIdentifier,
-            connection: connection
+            availableTargets: availableTargets
         )
         recoveryAvailabilityDeadline = nil
         return result
@@ -308,13 +373,17 @@ final class NativeBridgeController: BrowserEnforcing {
 
     func stop() {
         recoveryAvailabilityDeadline = nil
-        guard let plan = browserEnforcementState.plan,
-              let profileIdentifier = plan.profileIdentifier
-        else {
+        guard let plan = browserEnforcementState.plan else {
             enforcementFailure = nil
             return
         }
-        if let connection = connectionByProfile[profileIdentifier] {
+        for profileIdentifier in plan.profileIdentifiers.sorted(
+            by: { $0.rawValue < $1.rawValue }
+        ) {
+            guard let connection = connectionByProfile[profileIdentifier]
+            else {
+                continue
+            }
             try? listener.send(
                 .endEnforcement(profileIdentifier: profileIdentifier.rawValue),
                 to: connection
@@ -329,7 +398,11 @@ final class NativeBridgeController: BrowserEnforcing {
         from connection: BridgeConnectionIdentifier
     ) throws -> Bool {
         switch message {
-        case let .hello(extensionIdentifier, profileIdentifier):
+        case let .hello(
+            extensionIdentifier,
+            profileIdentifier,
+            capabilities
+        ):
             guard pendingConnections.contains(connection),
                   profileByConnection[connection] == nil,
                   extensionIdentifier
@@ -340,12 +413,6 @@ final class NativeBridgeController: BrowserEnforcing {
             }
 
             let profile = BrowserProfileIdentifier(rawValue: profileIdentifier)
-            if let connectedProfile = connectionByProfile.keys.first,
-               connectedProfile != profile {
-                reject(connection)
-                return true
-            }
-
             if let previous = connectionByProfile[profile],
                previous != connection {
                 listener.disconnect(previous)
@@ -354,6 +421,8 @@ final class NativeBridgeController: BrowserEnforcing {
             pendingConnections.remove(connection)
             profileByConnection[connection] = profile
             connectionByProfile[profile] = connection
+            capabilitiesByProfile[profile] = capabilities
+            profilesWithSnapshot.remove(profile)
             tabsByProfile[profile] = []
             try listener.send(
                 .helloAcknowledged(profileIdentifier: profileIdentifier),
@@ -374,6 +443,7 @@ final class NativeBridgeController: BrowserEnforcing {
                 return true
             }
             tabsByProfile[profile] = tabs.filter { !$0.isIncognito }
+            profilesWithSnapshot.insert(profile)
             return true
 
         case let .tabActivated(profileIdentifier, _, _):
@@ -400,8 +470,10 @@ final class NativeBridgeController: BrowserEnforcing {
                 return true
             }
             guard let plan = browserEnforcementState.plan,
-                  plan.profileIdentifier == profile,
-                  plan.availableTabIdentifiers.contains(tabIdentifier)
+                  plan.containsAvailableTab(
+                    profileIdentifier: profile,
+                    tabIdentifier: tabIdentifier
+                  )
             else {
                 return false
             }
@@ -456,20 +528,25 @@ final class NativeBridgeController: BrowserEnforcing {
             let confirmedWindowIdentifiers = Set(windowIdentifiers)
             let confirmedTabIdentifiers = Set(tabIdentifiers)
             switch browserEnforcementState {
-            case let .awaitingConfirmation(plan, _)
-                where plan.profileIdentifier == profile
-                    && plan.availableWindowIdentifiers
+            case let .awaitingConfirmation(currentPlan, deadline)
+                where currentPlan.profileIdentifiers.contains(profile)
+                    && currentPlan.availableWindowIdentifiers(for: profile)
                         == confirmedWindowIdentifiers
-                    && plan.availableTabIdentifiers
+                    && currentPlan.availableTabIdentifiers(for: profile)
                         == confirmedTabIdentifiers:
-                browserEnforcementState = .active(plan)
+                var plan = currentPlan
+                plan.confirmedProfiles.insert(profile)
+                browserEnforcementState = plan.confirmedProfiles
+                    == plan.profileIdentifiers
+                    ? .active(plan)
+                    : .awaitingConfirmation(plan, deadline: deadline)
             case .idle:
                 return false
             case let .active(plan)
-                where plan.profileIdentifier == profile
-                    && plan.availableWindowIdentifiers
+                where plan.confirmedProfiles.contains(profile)
+                    && plan.availableWindowIdentifiers(for: profile)
                         == confirmedWindowIdentifiers
-                    && plan.availableTabIdentifiers
+                    && plan.availableTabIdentifiers(for: profile)
                         == confirmedTabIdentifiers:
                 return false
             case .awaitingConfirmation, .active:
@@ -486,7 +563,9 @@ final class NativeBridgeController: BrowserEnforcing {
                 reject(connection)
                 return true
             }
-            if browserEnforcementState.plan?.profileIdentifier == profile {
+            if browserEnforcementState.plan?.profileIdentifiers
+                .contains(profile) == true
+            {
                 enforcementFailure = .extensionReported(code)
             }
             return false
@@ -514,7 +593,7 @@ final class NativeBridgeController: BrowserEnforcing {
         guard let plan = browserEnforcementState.plan else {
             return false
         }
-        guard plan.profileIdentifier == profile else {
+        guard plan.profileIdentifiers.contains(profile) else {
             reject(connection)
             return true
         }
@@ -561,40 +640,61 @@ final class NativeBridgeController: BrowserEnforcing {
 
     private func beginEnforcement(
         configuredTargets: [BrowserEnforcementTarget],
-        availableTargets: [BrowserEnforcementTarget],
-        profileIdentifier: BrowserProfileIdentifier,
-        connection: BridgeConnectionIdentifier
+        availableTargets: [BrowserEnforcementTarget]
     ) throws -> BrowserEnforcementStartResult {
         enforcementFailure = nil
-        try listener.send(
-            .beginEnforcement(
-                profileIdentifier: profileIdentifier.rawValue,
-                targets: try availableTargets.map {
-                    try bridgeEnforcementTarget(for: $0)
-                }
-            ),
-            to: connection
+        let plan = BrowserEnforcementPlan(
+            configuredTargets: configuredTargets,
+            availableTargets: availableTargets
         )
+        let deadline = now().addingTimeInterval(2)
         browserEnforcementState = .awaitingConfirmation(
-            BrowserEnforcementPlan(
-                configuredTargets: configuredTargets,
-                availableTargets: availableTargets
-            ),
-            deadline: now().addingTimeInterval(2)
+            plan,
+            deadline: deadline
+        )
+        do {
+            for profileIdentifier in plan.profileIdentifiers.sorted(
+                by: { $0.rawValue < $1.rawValue }
+            ) {
+                guard let connection = connectionByProfile[profileIdentifier],
+                      profileAvailability(profileIdentifier) == .ready
+                else {
+                    throw NativeBridgeError.disconnected
+                }
+                let targets = plan.availableTargets(for: profileIdentifier)
+                guard !targets.isEmpty else {
+                    throw NativeBridgeError.targetMissing
+                }
+                try listener.send(
+                    .beginEnforcement(
+                        profileIdentifier: profileIdentifier.rawValue,
+                        targets: try targets.map {
+                            try bridgeEnforcementTarget(for: $0)
+                        }
+                    ),
+                    to: connection
+                )
+            }
+        } catch {
+            stop()
+            throw error
+        }
+        browserEnforcementState = .awaitingConfirmation(
+            plan,
+            deadline: deadline
         )
         return .awaitingConfirmation
     }
 
-    private func selectedProfile(
+    private func selectedProfiles(
         for targets: [BrowserEnforcementTarget]
-    ) throws -> BrowserProfileIdentifier? {
+    ) throws -> Set<BrowserProfileIdentifier> {
         let profiles = Set(targets.map(\.profileIdentifier))
-        guard profiles.count <= 1,
-              Set(targets.map(\.targetIdentifier)).count == targets.count
+        guard Set(targets.map(\.targetIdentifier)).count == targets.count
         else {
             throw NativeBridgeError.disconnected
         }
-        return profiles.first
+        return profiles
     }
 
     private func validateAvailable(
@@ -602,6 +702,16 @@ final class NativeBridgeController: BrowserEnforcing {
     ) throws {
         let profileIdentifier = target.profileIdentifier
         guard connectionByProfile[profileIdentifier] != nil else {
+            throw NativeBridgeError.disconnected
+        }
+        switch profileAvailability(profileIdentifier) {
+        case .ready:
+            break
+        case .synchronizing:
+            throw NativeBridgeError.profileSynchronizing(profileIdentifier)
+        case .incognitoWindowControlRequired:
+            throw NativeBridgeError.unsupportedProfile(profileIdentifier)
+        case nil:
             throw NativeBridgeError.disconnected
         }
         if case let .tab(tab) = target {
@@ -641,6 +751,35 @@ final class NativeBridgeController: BrowserEnforcing {
         }
         recoveryAvailabilityDeadline = nil
         throw error
+    }
+
+    private func profileAvailability(
+        _ profileIdentifier: BrowserProfileIdentifier
+    ) -> BrowserProfileAvailability? {
+        guard connectionByProfile[profileIdentifier] != nil else {
+            return nil
+        }
+        guard capabilitiesByProfile[profileIdentifier]?
+            .incognitoWindowControl == true
+        else {
+            return .incognitoWindowControlRequired
+        }
+        return profilesWithSnapshot.contains(profileIdentifier)
+            ? .ready
+            : .synchronizing
+    }
+
+    private func recoveryError(
+        for profileIdentifier: BrowserProfileIdentifier
+    ) -> NativeBridgeError {
+        switch profileAvailability(profileIdentifier) {
+        case .incognitoWindowControlRequired:
+            .unsupportedProfile(profileIdentifier)
+        case .synchronizing:
+            .profileSynchronizing(profileIdentifier)
+        case .ready, nil:
+            .disconnected
+        }
     }
 
     private static func eligibleWebURL(from rawValue: String) -> URL? {
@@ -703,9 +842,11 @@ final class NativeBridgeController: BrowserEnforcing {
         }
         if connectionByProfile[profileIdentifier] == connection {
             connectionByProfile.removeValue(forKey: profileIdentifier)
+            capabilitiesByProfile.removeValue(forKey: profileIdentifier)
+            profilesWithSnapshot.remove(profileIdentifier)
             tabsByProfile.removeValue(forKey: profileIdentifier)
-            if browserEnforcementState.plan?.profileIdentifier
-                == profileIdentifier
+            if browserEnforcementState.plan?.profileIdentifiers
+                .contains(profileIdentifier) == true
             {
                 enforcementFailure = .disconnected
             }

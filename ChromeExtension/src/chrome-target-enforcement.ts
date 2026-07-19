@@ -503,6 +503,12 @@ export class ChromeTargetEnforcementCoordinator {
         };
         await this.save(current);
       }
+      if (
+        attemptedWindowId !== undefined &&
+        !isWindowCovered(current, attemptedWindowId)
+      ) {
+        current = await this.minimizeWindow(current, attemptedWindowId);
+      }
       if (decision.closeAttemptedTab) {
         await this.platform.closeTab(attemptedTabId);
         if (shouldNotify) {
@@ -516,12 +522,6 @@ export class ChromeTargetEnforcementCoordinator {
       }
       if (decision.restoreTarget === null) {
         return;
-      }
-      if (
-        attemptedWindowId !== undefined &&
-        !isWindowCovered(current, attemptedWindowId)
-      ) {
-        current = await this.minimizeWindow(current, attemptedWindowId);
       }
       const restoredTabId = await this.activateTarget(decision.restoreTarget);
       if (restoredTabId !== null) {
@@ -676,6 +676,7 @@ export class ChromeTargetEnforcementCoordinator {
     if (enforcement.minimizedWindows.some(
       (window) => window.windowId === windowId,
     )) {
+      await this.platform.minimizeWindow(windowId);
       return enforcement;
     }
     const previousState = await this.platform.captureWindowState(windowId);

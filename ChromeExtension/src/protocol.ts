@@ -3,18 +3,18 @@ import {
   requireProfileIdentifier,
 } from "./identifiers.js";
 
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 export const EXTENSION_ID = "hoofhoedlagpoclhkgnkmejaihaapoke";
 export const NATIVE_HOST_NAME = "com.staypane.native_bridge";
 
 export type HelloAcknowledged = {
-  version: 4;
+  version: 5;
   type: "helloAck";
   profileId: string;
 };
 
 export type RequestTabs = {
-  version: 4;
+  version: 5;
   type: "requestTabs";
   profileId: string;
 };
@@ -50,14 +50,14 @@ export type EnforcementTargetCommand =
   | EnforcementTabTargetCommand;
 
 export type BeginEnforcement = {
-  version: 4;
+  version: 5;
   type: "beginEnforcement";
   profileId: string;
   targets: EnforcementTargetCommand[];
 };
 
 export type EndEnforcement = {
-  version: 4;
+  version: 5;
   type: "endEnforcement";
   profileId: string;
 };
@@ -86,13 +86,21 @@ export type ExtensionWindowBounds = {
   height: number;
 };
 
-export function makeHello(profileId: string) {
+export type ExtensionProfileCapabilities = {
+  incognitoWindowControl: boolean;
+};
+
+export function makeHello(
+  profileId: string,
+  capabilities: ExtensionProfileCapabilities,
+) {
   requireProfileIdentifier(profileId);
   return {
     version: PROTOCOL_VERSION,
     type: "hello" as const,
     extensionId: EXTENSION_ID,
     profileId,
+    capabilities,
   };
 }
 

@@ -1,6 +1,6 @@
 # Ticket 11 manual acceptance: broad Chrome targets
 
-These checks cover real Chrome window focus, tab creation, and tab movement. Use one ordinary non-Incognito Chrome profile with StayPane Chrome Companion 0.4.0 loaded and connected.
+These checks cover real Chrome window focus, tab creation, and tab movement. Use one ordinary Chrome profile with StayPane Chrome Companion 0.5.0 loaded, **Allow in Incognito** enabled, and the profile shown as Ready.
 
 ## Hierarchy and warnings
 
@@ -33,5 +33,5 @@ These checks cover real Chrome window focus, tab creation, and tab movement. Use
 
 ## Automated coverage
 
-- `make test` covers the application/window/tab selection hierarchy, parent-child redundancy, bridge protocol v4, mixed target preflight, closure notices, and Session Engine coordination.
+- `make test` covers the application/window/tab selection hierarchy, parent-child redundancy, bridge protocol v5, mixed target preflight, closure notices, and Session Engine coordination.
 - `make test-extension` covers new tabs and arbitrary websites inside a broad window, uncovered-window minimization and restoration, movement across the selected-window boundary, precise-scope reapplication, runtime closure, mixed-target storage, and serialized lifecycle events.

@@ -210,22 +210,22 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 12 — Harden Chrome profiles, Incognito, and connection failures
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Make browser enforcement honest across Chrome profiles and runtime failures, refusing unsupported states before start and failing open when a verified connection disappears.
 
 **Blocked by:** 06 — Recover sessions across sleep, crashes, and restarts; 10 — Support exact-page scopes and multiple Chrome tabs; 11 — Support broad Chrome application and window targets.
 
-- [ ] Every selected Chrome profile must have an independently verified extension connection before a tab-restricted session starts.
-- [ ] Picker state makes connected, disconnected, and unsupported Chrome profiles understandable.
-- [ ] Incognito tabs cannot be selected in v1.
-- [ ] Incognito windows are minimized during a tab-restricted session unless the whole Chrome application is allowed.
-- [ ] Losing the extension, profile connection, or native bridge during enforcement stops all enforcement claims and produces Interrupted.
-- [ ] Fail-open behavior restores eligible macOS windows and leaves the user in control even if Chrome cleanup is incomplete.
-- [ ] Reconnection after interruption does not silently restart a terminated session.
-- [ ] Recovery refuses to resume a tab-restricted session until every required browser integration passes preflight.
-- [ ] Bridge inputs remain caller-restricted and schema-validated throughout disconnect and reconnect races.
-- [ ] Automated and manual tests cover multiple profiles, missing extensions, Incognito, extension disablement, bridge termination, malformed traffic, and relaunch recovery.
+- [x] Every selected Chrome profile must have an independently verified extension connection before a tab-restricted session starts.
+- [x] Picker state makes connected, disconnected, and unsupported Chrome profiles understandable.
+- [x] Incognito tabs cannot be selected in v1.
+- [x] Incognito windows are minimized during a tab-restricted session unless the whole Chrome application is allowed.
+- [x] Losing the extension, profile connection, or native bridge during enforcement stops all enforcement claims and produces Interrupted.
+- [x] Fail-open behavior restores eligible macOS windows and leaves the user in control even if Chrome cleanup is incomplete.
+- [x] Reconnection after interruption does not silently restart a terminated session.
+- [x] Recovery refuses to resume a tab-restricted session until every required browser integration passes preflight.
+- [x] Bridge inputs remain caller-restricted and schema-validated throughout disconnect and reconnect races.
+- [x] Automated and manual tests cover multiple profiles, missing extensions, Incognito, extension disablement, bridge termination, malformed traffic, and relaunch recovery.
 
 ## 13 — Complete first-run onboarding and accessible interaction
 

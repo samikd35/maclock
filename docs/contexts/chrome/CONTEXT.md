@@ -8,6 +8,10 @@ This context describes the Chrome-owned identities and observations used to enfo
 One Chrome profile in which the StayPane extension has its own stable local identity and Bridge Connection.
 _Avoid_: Browser account, Chrome user, extension instance
 
+**Profile Integration State**:
+The current preflight result for one Chrome Profile: Synchronizing after its connection and capabilities are verified but before its first current Tab Snapshot; Ready after that snapshot arrives; Disconnected when no verified connection exists; or Unsupported when the connection cannot enforce the required browser boundary. Only Ready profiles publish selectable browser Targets, and a reconnecting profile does not make saved Targets appear closed while it is Synchronizing.
+_Avoid_: Login state, account status, global Chrome connection
+
 **Tab Snapshot**:
 The current local description of open non-Incognito tabs grouped by their Chrome window identities. Optional window bounds let the Mac app associate a hover outline only when exactly one Accessibility window has the same observed frame; titles never establish identity.
 _Avoid_: Tab history, browsing log, tab cache
@@ -17,7 +21,7 @@ A selected Browser Window Target whose exact Chrome window identity still exists
 _Avoid_: Window scope, website window, tab collection
 
 **Chrome Target Enforcement**:
-Keeping Chrome activation within Available Browser Window Targets and Available Tab Targets, while applying Navigation Scopes only to precise Tab Targets outside broad windows. Chrome windows with no available Target are minimized and recorded locally. Windows StayPane changed are restored to their previous state when enforcement ends; windows already minimized before the Session remain minimized. Failed Restoration remains local and retryable instead of being discarded.
+Keeping Chrome activation within Available Browser Window Targets and Available Tab Targets, while applying Navigation Scopes only to precise Tab Targets outside broad windows. Chrome windows with no available Target, including Incognito windows that cannot be selected, are minimized and recorded locally. Windows StayPane changed are restored to their previous state when enforcement ends; windows already minimized before the Session remain minimized. Failed Restoration remains local and retryable instead of being discarded. A broad Chrome Application Target intentionally bypasses Chrome Target Enforcement and permits Incognito content with all other Chrome content.
 _Avoid_: Tab blocking, window filter, browsing mode
 
 **Blocked Tab Activation**:

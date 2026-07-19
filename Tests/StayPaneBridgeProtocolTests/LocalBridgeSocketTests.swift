@@ -10,7 +10,10 @@ import Testing
     let client = try LocalBridgeClient(socketURL: socketURL)
     let hello = BridgeMessage.hello(
         extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
-        profileIdentifier: "profile-one"
+        profileIdentifier: "profile-one",
+        capabilities: BridgeProfileCapabilities(
+            incognitoWindowControl: true
+        )
     )
 
     try client.send(hello)
