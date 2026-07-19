@@ -2,6 +2,10 @@ import {
   isValidChromeIdentifier,
   isValidProfileIdentifier,
 } from "./identifiers.js";
+import {
+  CurrentWebsiteScope,
+  isValidCurrentWebsiteScope,
+} from "./navigation-policy.js";
 
 const STORAGE_KEY = "stayPaneTabActivationEnforcement";
 
@@ -9,6 +13,7 @@ export type TabActivationEnforcement = {
   profileId: string;
   tabId: number;
   windowId: number;
+  navigationScope: CurrentWebsiteScope;
 };
 
 export type TabActivationStorePort = {
@@ -42,7 +47,8 @@ export async function loadTabActivationEnforcement(
   if (
     !isValidProfileIdentifier(value.profileId) ||
     !isValidChromeIdentifier(value.tabId) ||
-    !isValidChromeIdentifier(value.windowId)
+    !isValidChromeIdentifier(value.windowId) ||
+    !isValidCurrentWebsiteScope(value.navigationScope)
   ) {
     await clearTabActivationEnforcement(store);
     return null;

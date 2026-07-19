@@ -122,6 +122,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 "StayPane returned Chrome to the allowed tab."
             )
         }
+        nativeBridge?.onBlockedNavigation = { [weak self] in
+            self?.recordDiagnostic(.blockedTarget)
+            self?.showNotice(
+                "StayPane returned the selected Chrome tab to its Current Website."
+            )
+        }
 
         var startupNotice: String?
         do {

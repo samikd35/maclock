@@ -820,7 +820,7 @@ struct StayPaneMenuView: View {
 
     private var preciseBrowserTabNote: some View {
         Label(
-            "Chrome tab targets control tab activation only in this version. The chosen tab is immutable during the session, but navigation inside it remains unrestricted until website-scope support is added.",
+            "Chrome Tab Targets use Current Website. The chosen tab stays immutable; HTTP and HTTPS pages on its exact hostname are allowed across paths, queries, ports, and fragments. Other hostnames and special schemes return to the Last Allowed Page, while newly opened tabs are transferred or closed.",
             systemImage: "rectangle.stack.badge.person.crop"
         )
         .font(.caption.weight(.medium))
@@ -979,7 +979,9 @@ struct StayPaneMenuView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tab.title)
                         .lineLimit(1)
-                    Text(tab.url.host ?? tab.url.absoluteString)
+                    Text(
+                        "Current Website • \(tab.url.host ?? tab.url.absoluteString)"
+                    )
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1072,7 +1074,7 @@ struct StayPaneMenuView: View {
             TargetPresentation(
                 label: "\(tab.title) in \(tab.application.displayName)",
                 reviewTitle: "Individual Chrome tab",
-                reviewValue: "\(tab.title) — \(tab.url.host ?? tab.url.absoluteString)",
+                reviewValue: "\(tab.title) — Current Website: \(tab.url.host ?? tab.url.absoluteString)",
                 systemImage: "rectangle.stack",
                 isBroadApplication: false
             )

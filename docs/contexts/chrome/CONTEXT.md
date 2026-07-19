@@ -19,3 +19,15 @@ _Avoid_: Tab blocking, tab closing, navigation enforcement
 **Blocked Tab Activation**:
 An attempt to activate a tab other than the selected Tab Target while Tab Activation Enforcement is active.
 _Avoid_: Blocked website, navigation violation
+
+**Current Website**:
+The default Navigation Scope for an individual Tab Target. It permits top-level HTTP and HTTPS navigation on the selected hostname across paths, queries, ports, and fragments; a subdomain is a different hostname.
+_Avoid_: Domain allowlist, same origin, URL prefix
+
+**Last Allowed Page**:
+The most recent fully completed page within Current Website. StayPane returns the selected Tab Target here after a disallowed navigation commits.
+_Avoid_: Browser history, previous URL, saved page
+
+**Blocked Navigation**:
+A top-level navigation outside the selected Tab Target's Navigation Scope. It returns the selected tab to its Last Allowed Page without changing the immutable scope.
+_Avoid_: Blocked website, unsafe URL, tab activation

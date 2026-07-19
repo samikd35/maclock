@@ -1,6 +1,8 @@
 import {
+  BeginEnforcement,
   EXTENSION_ID,
   NATIVE_HOST_NAME,
+  makeBlockedNavigation,
   makeBlockedTabActivation,
   makeEnforcementError,
   makeHello,
@@ -13,11 +15,17 @@ import { isValidProfileIdentifier } from "./identifiers.js";
 import { NativeCommandQueue } from "./native-command-queue.js";
 import {
   TabActivationEnforcement,
-  clearTabActivationEnforcement,
   loadTabActivationEnforcement,
-  saveTabActivationEnforcement,
 } from "./tab-activation-store.js";
 import { decideTabActivation } from "./tab-policy.js";
+import {
+  createCurrentWebsiteScope,
+  isWithinCurrentWebsite,
+} from "./navigation-policy.js";
+import {
+  CurrentWebsiteNavigationEnforcer,
+  NavigationEnforcementEvent,
+} from "./navigation-enforcement.js";
 import { collectTabSnapshots } from "./tab-snapshot.js";
 
 const PROFILE_STORAGE_KEY = "stayPaneProfileIdentifier";
@@ -29,14 +37,48 @@ let reconnectTimer: number | null = null;
 let snapshotTimer: number | null = null;
 let lastFeedbackAt: number | null = null;
 
+const navigationEnforcer = new CurrentWebsiteNavigationEnforcer({
+  platform: {
+    async navigateTab(tabId, url) {
+      await chrome.tabs.update(tabId, { url });
+    },
+    async closeTab(tabId) {
+      await chrome.tabs.remove(tabId);
+    },
+    blockedNavigation(profileId, tabId) {
+      showBlockedNavigationFeedback();
+      nativePort?.postMessage(makeBlockedNavigation(profileId, tabId));
+    },
+  },
+  feedbackIntervalMs: FEEDBACK_INTERVAL_MS,
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   void ensureNativeConnection();
 });
 chrome.runtime.onStartup.addListener(() => {
   void ensureNativeConnection();
 });
-chrome.tabs.onCreated.addListener(() => scheduleSnapshot());
-chrome.tabs.onUpdated.addListener(() => scheduleSnapshot());
+chrome.tabs.onCreated.addListener((tab) => {
+  scheduleSnapshot();
+  void handleOpenedTab(tab);
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  scheduleSnapshot();
+  if (changeInfo.url !== undefined) {
+    void handleNavigationEvent({
+      type: "urlChanged",
+      tabId,
+      url: changeInfo.url,
+    });
+  }
+  if (
+    tab.openerTabId !== undefined &&
+    (changeInfo.url !== undefined || changeInfo.status !== undefined)
+  ) {
+    void handleOpenedTab(tab);
+  }
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   void handleRemovedTab(tabId);
   scheduleSnapshot();
@@ -48,6 +90,22 @@ chrome.tabs.onAttached.addListener(() => scheduleSnapshot());
 chrome.tabs.onDetached.addListener(() => scheduleSnapshot());
 chrome.windows.onFocusChanged.addListener((windowId) => {
   void handleChromeWindowFocused(windowId);
+});
+chrome.webNavigation.onCommitted.addListener((details) => {
+  void handleNavigationEvent(makeDocumentNavigationEvent("committed", details));
+});
+chrome.webNavigation.onCompleted.addListener((details) => {
+  void handleNavigationEvent(makeDocumentNavigationEvent("completed", details));
+});
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+  void handleNavigationEvent(
+    makeDocumentNavigationEvent("historyUpdated", details),
+  );
+});
+chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
+  void handleNavigationEvent(
+    makeDocumentNavigationEvent("historyUpdated", details),
+  );
 });
 
 void ensureNativeConnection();
@@ -144,26 +202,49 @@ async function handleNativeMessage(
 }
 
 async function beginEnforcement(
-  enforcement: TabActivationEnforcement,
+  command: BeginEnforcement,
 ): Promise<void> {
   let tab: chrome.tabs.Tab;
   try {
-    tab = await chrome.tabs.get(enforcement.tabId);
+    tab = await chrome.tabs.get(command.tabId);
   } catch {
-    sendEnforcementError(enforcement.profileId, "targetMissing");
+    sendEnforcementError(command.profileId, "targetMissing");
     return;
   }
   if (
     tab.incognito ||
-    tab.windowId !== enforcement.windowId ||
-    tab.id !== enforcement.tabId
+    tab.windowId !== command.windowId ||
+    tab.id !== command.tabId
   ) {
-    sendEnforcementError(enforcement.profileId, "targetMissing");
+    sendEnforcementError(command.profileId, "targetMissing");
     return;
   }
 
   try {
-    await saveTabActivationEnforcement(enforcement);
+    const navigationScope = createCurrentWebsiteScope(
+      command.navigationScope.initialUrl,
+    );
+    if (
+      tab.url !== undefined &&
+      isWithinCurrentWebsite(navigationScope, tab.url)
+    ) {
+      navigationScope.lastAllowedUrl = new URL(tab.url).href;
+    }
+    const enforcement: TabActivationEnforcement = {
+      profileId: command.profileId,
+      tabId: command.tabId,
+      windowId: command.windowId,
+      navigationScope,
+    };
+    await navigationEnforcer.start(enforcement);
+    if (
+      tab.url === undefined ||
+      !isWithinCurrentWebsite(navigationScope, tab.url)
+    ) {
+      await chrome.tabs.update(command.tabId, {
+        url: navigationScope.lastAllowedUrl,
+      });
+    }
     await activateAllowedTab(enforcement);
     nativePort?.postMessage(
       makeTabActivationStarted(
@@ -174,7 +255,50 @@ async function beginEnforcement(
     );
   } catch {
     await stopTabActivationEnforcement();
-    sendEnforcementError(enforcement.profileId, "activationFailed");
+    sendEnforcementError(command.profileId, "activationFailed");
+  }
+}
+
+function makeDocumentNavigationEvent(
+  type: "committed" | "completed" | "historyUpdated",
+  details: chrome.webNavigation.WebNavigationFramedCallbackDetails,
+): NavigationEnforcementEvent {
+  return {
+    type,
+    tabId: details.tabId,
+    frameId: details.frameId,
+    documentId:
+      details.documentId ??
+      `legacy:${details.processId}:${details.frameId}:${details.url}`,
+    url: details.url,
+  };
+}
+
+async function handleOpenedTab(tab: chrome.tabs.Tab): Promise<void> {
+  if (tab.id === undefined) {
+    return;
+  }
+  await handleNavigationEvent({
+    type: "openedTab",
+    tabId: tab.id,
+    openerTabId: tab.openerTabId,
+    pendingUrl: tab.pendingUrl,
+    url: tab.url,
+    isComplete: tab.status === "complete",
+  });
+}
+
+async function handleNavigationEvent(
+  event: NavigationEnforcementEvent,
+): Promise<void> {
+  try {
+    await navigationEnforcer.handle(event);
+  } catch {
+    const enforcement = await loadTabActivationEnforcement();
+    await stopTabActivationEnforcement();
+    if (enforcement !== null) {
+      sendEnforcementError(enforcement.profileId, "activationFailed");
+    }
   }
 }
 
@@ -290,8 +414,9 @@ async function loadProfileIdentifier(): Promise<string> {
 
 async function stopTabActivationEnforcement(): Promise<void> {
   lastFeedbackAt = null;
-  await clearTabActivationEnforcement();
+  await navigationEnforcer.stop();
   await chrome.action.setBadgeText({ text: "" });
+  await chrome.action.setTitle({ title: "StayPane Chrome Companion" });
 }
 
 function sendEnforcementError(
@@ -306,6 +431,18 @@ function showBlockedFeedback(): void {
   void chrome.action.setBadgeText({ text: "↩" });
   setTimeout(() => {
     void chrome.action.setBadgeText({ text: "" });
+  }, 1_200);
+}
+
+function showBlockedNavigationFeedback(): void {
+  void chrome.action.setBadgeBackgroundColor({ color: "#C2410C" });
+  void chrome.action.setBadgeText({ text: "SITE" });
+  void chrome.action.setTitle({
+    title: "StayPane returned the selected tab to its Current Website.",
+  });
+  setTimeout(() => {
+    void chrome.action.setBadgeText({ text: "" });
+    void chrome.action.setTitle({ title: "StayPane Chrome Companion" });
   }, 1_200);
 }
 

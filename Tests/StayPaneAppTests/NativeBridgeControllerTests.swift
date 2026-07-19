@@ -49,6 +49,24 @@ import Testing
                     faviconDataURL: nil,
                     isActive: false,
                     isIncognito: true
+                ),
+                BridgeTabSnapshot(
+                    tabIdentifier: 14,
+                    windowIdentifier: 4,
+                    title: "Chrome settings",
+                    url: "chrome://settings/",
+                    faviconDataURL: nil,
+                    isActive: false,
+                    isIncognito: false
+                ),
+                BridgeTabSnapshot(
+                    tabIdentifier: 15,
+                    windowIdentifier: 4,
+                    title: "Local file",
+                    url: "file:///tmp/notes.txt",
+                    faviconDataURL: nil,
+                    isActive: false,
+                    isIncognito: false
                 )
             ]
         )
@@ -74,7 +92,10 @@ import Testing
             == .beginEnforcement(
                 profileIdentifier: profileIdentifier,
                 tabIdentifier: 12,
-                windowIdentifier: 4
+                windowIdentifier: 4,
+                navigationScope: .currentWebsite(
+                    initialURL: "https://www.swift.org/documentation/"
+                )
             )
     )
     try client.send(
@@ -86,6 +107,19 @@ import Testing
     )
     try controller.poll()
     #expect(try controller.start(allowing: [target]) == .active)
+
+    var blockedNavigationCount = 0
+    controller.onBlockedNavigation = {
+        blockedNavigationCount += 1
+    }
+    try client.send(
+        .blockedNavigation(
+            profileIdentifier: profileIdentifier,
+            tabIdentifier: 12
+        )
+    )
+    try controller.poll()
+    #expect(blockedNavigationCount == 1)
 
     controller.stop()
     #expect(

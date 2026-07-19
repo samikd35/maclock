@@ -1,10 +1,14 @@
 import Foundation
 
 public enum StayPaneBridgeConstants {
-    public static let protocolVersion = 1
+    public static let protocolVersion = 2
     public static let nativeHostName = "com.staypane.native_bridge"
     public static let extensionIdentifier = "hoofhoedlagpoclhkgnkmejaihaapoke"
     public static let allowedOrigin = "chrome-extension://\(extensionIdentifier)/"
+}
+
+public enum BridgeNavigationScope: Equatable, Sendable {
+    case currentWebsite(initialURL: String)
 }
 
 public enum BridgeProtocolError: Error, Equatable, Sendable {
@@ -67,6 +71,10 @@ public enum BridgeMessage: Equatable, Sendable {
         attemptedTabIdentifier: Int,
         allowedTabIdentifier: Int
     )
+    case blockedNavigation(
+        profileIdentifier: String,
+        tabIdentifier: Int
+    )
     case tabActivationStarted(
         profileIdentifier: String,
         tabIdentifier: Int,
@@ -80,14 +88,16 @@ public enum BridgeMessage: Equatable, Sendable {
     case beginEnforcement(
         profileIdentifier: String,
         tabIdentifier: Int,
-        windowIdentifier: Int
+        windowIdentifier: Int,
+        navigationScope: BridgeNavigationScope
     )
     case endEnforcement(profileIdentifier: String)
 
     public var direction: BridgeMessageDirection {
         switch self {
         case .hello, .tabsSnapshot, .tabActivated,
-             .blockedTabActivation, .tabActivationStarted,
+             .blockedTabActivation, .blockedNavigation,
+             .tabActivationStarted,
              .enforcementError:
             .extensionToNative
         case .helloAcknowledged, .requestTabs, .beginEnforcement,
@@ -193,6 +203,19 @@ public enum BridgeMessageCodec {
                 )
             )
 
+        case "blockedNavigation":
+            try requireKeys(
+                dictionary,
+                exactly: ["version", "type", "profileId", "tabId"]
+            )
+            return .blockedNavigation(
+                profileIdentifier: try requiredProfileIdentifier(dictionary),
+                tabIdentifier: try requiredPositiveInteger(
+                    dictionary,
+                    key: "tabId"
+                )
+            )
+
         case "tabActivationStarted":
             try requireKeys(
                 dictionary,
@@ -234,7 +257,10 @@ public enum BridgeMessageCodec {
         case "beginEnforcement":
             try requireKeys(
                 dictionary,
-                exactly: ["version", "type", "profileId", "tabId", "windowId"]
+                exactly: [
+                    "version", "type", "profileId", "tabId", "windowId",
+                    "navigationScope"
+                ]
             )
             return .beginEnforcement(
                 profileIdentifier: try requiredProfileIdentifier(dictionary),
@@ -245,6 +271,9 @@ public enum BridgeMessageCodec {
                 windowIdentifier: try requiredPositiveInteger(
                     dictionary,
                     key: "windowId"
+                ),
+                navigationScope: try decodeNavigationScope(
+                    dictionary["navigationScope"]
                 )
             )
 
@@ -299,6 +328,12 @@ public enum BridgeMessageCodec {
                 "attemptedTabId": attemptedTabIdentifier,
                 "allowedTabId": allowedTabIdentifier
             ]) { _, new in new }
+        case let .blockedNavigation(profileIdentifier, tabIdentifier):
+            object.merge([
+                "type": "blockedNavigation",
+                "profileId": profileIdentifier,
+                "tabId": tabIdentifier
+            ]) { _, new in new }
         case let .tabActivationStarted(
             profileIdentifier,
             tabIdentifier,
@@ -324,13 +359,15 @@ public enum BridgeMessageCodec {
         case let .beginEnforcement(
             profileIdentifier,
             tabIdentifier,
-            windowIdentifier
+            windowIdentifier,
+            navigationScope
         ):
             object.merge([
                 "type": "beginEnforcement",
                 "profileId": profileIdentifier,
                 "tabId": tabIdentifier,
-                "windowId": windowIdentifier
+                "windowId": windowIdentifier,
+                "navigationScope": encodeNavigationScope(navigationScope)
             ]) { _, new in new }
         case let .endEnforcement(profileIdentifier):
             object.merge([
@@ -405,6 +442,46 @@ public enum BridgeMessageCodec {
             object["faviconDataUrl"] = faviconDataURL
         }
         return object
+    }
+
+    private static func decodeNavigationScope(
+        _ value: Any?
+    ) throws -> BridgeNavigationScope {
+        guard let dictionary = value as? [String: Any] else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        try requireKeys(dictionary, exactly: ["type", "initialUrl"])
+        guard validatedString(dictionary["type"], maximum: 64)
+                == "currentWebsite",
+              let initialURL = validatedWebURL(dictionary["initialUrl"])
+        else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        return .currentWebsite(initialURL: initialURL)
+    }
+
+    private static func encodeNavigationScope(
+        _ scope: BridgeNavigationScope
+    ) -> [String: Any] {
+        switch scope {
+        case let .currentWebsite(initialURL):
+            [
+                "type": "currentWebsite",
+                "initialUrl": initialURL
+            ]
+        }
+    }
+
+    private static func validatedWebURL(_ value: Any?) -> String? {
+        guard let value = validatedString(value, maximum: 8_192),
+              let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false
+        else {
+            return nil
+        }
+        return value
     }
 
     private static func validatedPNGData(from dataURL: String) -> Data? {

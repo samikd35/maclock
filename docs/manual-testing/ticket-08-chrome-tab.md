@@ -19,7 +19,7 @@ No Apple or Google paid developer account is part of this source-build flow. Reb
 3. Confirm a **Chrome tabs** section appears beneath the macOS window rows. Tabs must be grouped by Chrome window and show title, hostname, and a favicon when Chrome provides one.
 4. Confirm Incognito tabs do not appear.
 5. Choose one tab, then choose a different tab. Only the latest tab remains selected; an active Session must show that exact immutable Tab Target.
-6. Read the visible precision note: this ticket controls tab activation, not navigation within the selected tab. Browsing to another website inside that tab remains possible until Ticket 09.
+6. Read the visible precision note. The current build now applies Ticket 09's Current Website Navigation Scope; use the Ticket 09 manual checks for navigation behavior.
 
 ## Preflight, enforcement, and feedback
 
@@ -36,4 +36,4 @@ No Apple or Google paid developer account is part of this source-build flow. Reb
 1. Inspect the extension service worker in `chrome://extensions`. StayPane traffic must use the native port `com.staypane.native_bridge`; the only `fetch` is Chrome's own `chrome-extension://.../_favicon/` endpoint.
 2. Confirm no StayPane account, server URL, analytics request, telemetry prompt, or browsing-history store is present.
 3. Run `make test`. Swift contract tests cover strict identity/schema validation, partial and oversized native frames, user-level manifest setup errors, real Unix-socket handshake/tab discovery, begin/end enforcement, preflight failure, and connection loss.
-4. Run `make test-extension`. TypeScript/Node tests cover the fixed handshake, malformed and extra command rejection, immutable tab restoration, and feedback rate limiting.
+4. Run `make test-extension`. TypeScript/Node tests cover the fixed handshake, malformed and extra command rejection, immutable tab restoration, Current Website policy, and feedback rate limiting.

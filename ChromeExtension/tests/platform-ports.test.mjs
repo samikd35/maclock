@@ -70,12 +70,54 @@ test("tab activation storage is isolated behind its port", async () => {
       delete values[key];
     },
   };
-  const enforcement = { profileId: "profile_one", tabId: 41, windowId: 9 };
+  const enforcement = {
+    profileId: "profile_one",
+    tabId: 41,
+    windowId: 9,
+    navigationScope: {
+      type: "currentWebsite",
+      hostname: "work.example",
+      lastAllowedUrl: "https://work.example/project",
+      pendingNavigation: {
+        documentId: "document-project",
+        url: "https://work.example/project?view=board",
+      },
+    },
+  };
 
   await saveTabActivationEnforcement(enforcement, store);
   assert.deepEqual(await loadTabActivationEnforcement(store), enforcement);
   await clearTabActivationEnforcement(store);
   assert.equal(await loadTabActivationEnforcement(store), null);
+});
+
+test("invalid persisted Current Website state is cleared", async () => {
+  const values = {
+    stayPaneTabActivationEnforcement: {
+      profileId: "profile_one",
+      tabId: 41,
+      windowId: 9,
+      navigationScope: {
+        type: "currentWebsite",
+        hostname: "work.example",
+        lastAllowedUrl: "https://other.example/project",
+      },
+    },
+  };
+  const store = {
+    async get() {
+      return { ...values };
+    },
+    async set(items) {
+      Object.assign(values, items);
+    },
+    async remove(key) {
+      delete values[key];
+    },
+  };
+
+  assert.equal(await loadTabActivationEnforcement(store), null);
+  assert.deepEqual(values, {});
 });
 
 test("tab snapshots use injected Chrome and favicon ports", async () => {

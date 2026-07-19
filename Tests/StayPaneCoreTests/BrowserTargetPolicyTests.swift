@@ -39,3 +39,32 @@ import Testing
     #expect(selectedApplication)
     #expect(policy.targets == [.application(chrome)])
 }
+
+@Test func individualTabsDefaultToCurrentWebsiteNavigationScope() throws {
+    let target = BrowserTabTarget(
+        profileIdentifier: BrowserProfileIdentifier(rawValue: "profile-one"),
+        tabIdentifier: BrowserTabIdentifier(rawValue: 41),
+        windowIdentifier: BrowserWindowIdentifier(rawValue: 9),
+        title: "Project plan",
+        url: URL(string: "https://work.example/project?view=board")!,
+        faviconPNGData: nil,
+        application: ApplicationTarget(
+            displayName: "Google Chrome",
+            bundleIdentifier: "com.google.Chrome"
+        )
+    )
+
+    #expect(target.navigationScope == .currentWebsite)
+
+    let encoded = try JSONEncoder().encode(target)
+    var legacyObject = try #require(
+        JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    legacyObject.removeValue(forKey: "navigationScope")
+    let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+
+    #expect(
+        try JSONDecoder().decode(BrowserTabTarget.self, from: legacyData)
+            .navigationScope == .currentWebsite
+    )
+}

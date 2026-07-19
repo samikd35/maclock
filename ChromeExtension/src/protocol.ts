@@ -3,32 +3,38 @@ import {
   requireProfileIdentifier,
 } from "./identifiers.js";
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 export const EXTENSION_ID = "hoofhoedlagpoclhkgnkmejaihaapoke";
 export const NATIVE_HOST_NAME = "com.staypane.native_bridge";
 
 export type HelloAcknowledged = {
-  version: 1;
+  version: 2;
   type: "helloAck";
   profileId: string;
 };
 
 export type RequestTabs = {
-  version: 1;
+  version: 2;
   type: "requestTabs";
   profileId: string;
 };
 
+export type CurrentWebsiteScopeCommand = {
+  type: "currentWebsite";
+  initialUrl: string;
+};
+
 export type BeginEnforcement = {
-  version: 1;
+  version: 2;
   type: "beginEnforcement";
   profileId: string;
   tabId: number;
   windowId: number;
+  navigationScope: CurrentWebsiteScopeCommand;
 };
 
 export type EndEnforcement = {
-  version: 1;
+  version: 2;
   type: "endEnforcement";
   profileId: string;
 };
@@ -132,6 +138,17 @@ export function makeBlockedTabActivation(
   };
 }
 
+export function makeBlockedNavigation(profileId: string, tabId: number) {
+  requireProfileIdentifier(profileId);
+  requireChromeIdentifier(tabId);
+  return {
+    version: PROTOCOL_VERSION,
+    type: "blockedNavigation" as const,
+    profileId,
+    tabId,
+  };
+}
+
 export function makeTabActivationStarted(
   profileId: string,
   tabId: number,
@@ -190,6 +207,7 @@ export function parseNativeMessage(value: unknown): NativeMessage {
         "profileId",
         "tabId",
         "windowId",
+        "navigationScope",
       ]);
       return {
         version: PROTOCOL_VERSION,
@@ -197,6 +215,7 @@ export function parseNativeMessage(value: unknown): NativeMessage {
         profileId: requireProfileIdentifier(record.profileId),
         tabId: requireChromeIdentifier(record.tabId),
         windowId: requireChromeIdentifier(record.windowId),
+        navigationScope: requireCurrentWebsiteScope(record.navigationScope),
       };
     case "endEnforcement":
       requireExactKeys(record, ["version", "type", "profileId"]);
@@ -208,6 +227,35 @@ export function parseNativeMessage(value: unknown): NativeMessage {
     default:
       throw new Error("Unknown StayPane bridge message");
   }
+}
+
+function requireCurrentWebsiteScope(
+  value: unknown,
+): CurrentWebsiteScopeCommand {
+  const record = requireRecord(value);
+  requireExactKeys(record, ["type", "initialUrl"]);
+  if (record.type !== "currentWebsite" || typeof record.initialUrl !== "string") {
+    throw new Error("Invalid Current Website scope");
+  }
+  const encoded = new TextEncoder().encode(record.initialUrl);
+  let parsed: URL;
+  try {
+    parsed = new URL(record.initialUrl);
+  } catch {
+    throw new Error("Invalid Current Website URL");
+  }
+  if (
+    encoded.length === 0 ||
+    encoded.length > 8_192 ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.hostname.length === 0
+  ) {
+    throw new Error("Invalid Current Website URL");
+  }
+  return {
+    type: "currentWebsite",
+    initialUrl: record.initialUrl,
+  };
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

@@ -64,6 +64,7 @@ final class NativeBridgeController: TabActivationEnforcing {
 
     var onChange: (() -> Void)?
     var onBlockedTabActivation: (() -> Void)?
+    var onBlockedNavigation: (() -> Void)?
 
     init(
         socketURL: URL = StayPaneBridgeSocketLocation.defaultURL,
@@ -82,7 +83,7 @@ final class NativeBridgeController: TabActivationEnforcing {
             .flatMap { profileIdentifier, tabs in
                 tabs.compactMap { tab -> BrowserTabTarget? in
                     guard !tab.isIncognito,
-                          let url = URL(string: tab.url)
+                          let url = Self.eligibleWebURL(from: tab.url)
                     else {
                         return nil
                     }
@@ -182,7 +183,10 @@ final class NativeBridgeController: TabActivationEnforcing {
             .beginEnforcement(
                 profileIdentifier: profileIdentifier.rawValue,
                 tabIdentifier: target.tabIdentifier.rawValue,
-                windowIdentifier: target.windowIdentifier.rawValue
+                windowIdentifier: target.windowIdentifier.rawValue,
+                navigationScope: .currentWebsite(
+                    initialURL: target.url.absoluteString
+                )
             ),
             to: connection
         )
@@ -292,7 +296,9 @@ final class NativeBridgeController: TabActivationEnforcing {
                 reject(connection)
                 return true
             }
-            tabsByProfile[profile] = tabs.filter { !$0.isIncognito }
+            tabsByProfile[profile] = tabs.filter {
+                !$0.isIncognito && Self.eligibleWebURL(from: $0.url) != nil
+            }
             return true
 
         case let .tabActivated(profileIdentifier, _, _):
@@ -308,6 +314,23 @@ final class NativeBridgeController: TabActivationEnforcing {
                 return true
             }
             onBlockedTabActivation?()
+            return false
+
+        case let .blockedNavigation(profileIdentifier, tabIdentifier):
+            guard let profile = validatedProfile(
+                profileIdentifier,
+                from: connection
+            ) else {
+                reject(connection)
+                return true
+            }
+            guard let target = tabActivationState.target,
+                  target.profileIdentifier == profile,
+                  target.tabIdentifier.rawValue == tabIdentifier
+            else {
+                return false
+            }
+            onBlockedNavigation?()
             return false
 
         case let .tabActivationStarted(
@@ -368,11 +391,23 @@ final class NativeBridgeController: TabActivationEnforcing {
         }
         guard tabsByProfile[profileIdentifier]?.contains(where: {
             !$0.isIncognito
+                && Self.eligibleWebURL(from: $0.url) != nil
                 && $0.tabIdentifier == target.tabIdentifier.rawValue
                 && $0.windowIdentifier == target.windowIdentifier.rawValue
         }) == true else {
             throw NativeBridgeError.targetMissing
         }
+    }
+
+    private static func eligibleWebURL(from rawValue: String) -> URL? {
+        guard let url = URL(string: rawValue),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host?.isEmpty == false
+        else {
+            return nil
+        }
+        return url
     }
 
     @discardableResult

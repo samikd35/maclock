@@ -25,8 +25,12 @@ A precise Target representing one currently existing window and qualifying trans
 _Avoid_: Window title, document target
 
 **Tab Target**:
-A precise Target representing one currently existing, non-Incognito browser tab within one Browser Profile. Its identity, not its title or URL, determines which tab remains available.
+A precise Target representing one currently existing, non-Incognito browser tab within one Browser Profile. Its identity determines which tab remains available, while its immutable Navigation Scope determines which top-level content may remain in that tab.
 _Avoid_: Website target, tab title, browser exception
+
+**Navigation Scope**:
+The immutable browser-content rule attached to an individual Tab Target for the duration of a Session.
+_Avoid_: Website blocklist, browsing filter, tab permission
 
 **Exact Window Identity**:
 The identity of one currently existing window. Closing it ends that identity; a reopened window with the same title has a new identity.

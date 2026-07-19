@@ -12,9 +12,10 @@ test("is a local-only Manifest V3 extension with the fixed identity", () => {
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, "module");
   assert.equal(manifest.incognito, "not_allowed");
+  assert.equal(manifest.version, "0.2.0");
   assert.deepEqual(
     [...manifest.permissions].sort(),
-    ["favicon", "nativeMessaging", "storage", "tabs"],
+    ["favicon", "nativeMessaging", "storage", "tabs", "webNavigation"],
   );
   assert.equal(manifest.host_permissions, undefined);
 

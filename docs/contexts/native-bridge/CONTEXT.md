@@ -19,3 +19,11 @@ _Avoid_: Account connection, network session, browser session
 **Native Host Registration**:
 The local Chrome configuration that permits only the expected unpacked extension identity to launch the Native Bridge.
 _Avoid_: Extension install, account setup, server registration
+
+**Navigation Scope Command**:
+A versioned Native Bridge command that starts enforcement for an exact Tab Target with its immutable Navigation Scope and initial web URL.
+_Avoid_: Website history, remote rule, browsing configuration
+
+**Blocked Navigation Notice**:
+A content-free Native Bridge event containing only the Chrome Profile and Tab Target identities needed to show bounded local feedback.
+_Avoid_: URL report, browsing event, website telemetry

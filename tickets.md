@@ -157,20 +157,20 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 09 — Constrain an allowed Chrome tab to its website
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Close the navigation loophole by keeping an individually selected tab on its chosen website and handling links that attempt to create additional tabs.
 
 **Blocked by:** 08 — Connect one Chrome tab through the native bridge.
 
-- [ ] Current Website is available as the default scope for an individual tab target.
-- [ ] HTTP and HTTPS top-level navigation on the selected hostname is allowed across paths and query parameters.
-- [ ] Navigation to a different hostname is blocked and the tab returns to its last allowed page.
-- [ ] A same-scope link that opens a new tab is transferred into the original allowed tab and the new tab closes.
-- [ ] An out-of-scope new tab closes while the original allowed tab remains unchanged.
-- [ ] New tabs are never added to the immutable allowlist automatically.
-- [ ] A small, rate-limited notice explains blocked navigation without repeatedly distracting the user.
-- [ ] Tests cover schemes, hostnames, paths, redirects, rapid navigation, same-scope links, and cross-scope new tabs.
+- [x] Current Website is available as the default scope for an individual tab target.
+- [x] HTTP and HTTPS top-level navigation on the selected hostname is allowed across paths and query parameters.
+- [x] Navigation to a different hostname is blocked and the tab returns to its last allowed page.
+- [x] A same-scope link that opens a new tab is transferred into the original allowed tab and the new tab closes.
+- [x] An out-of-scope new tab closes while the original allowed tab remains unchanged.
+- [x] New tabs are never added to the immutable allowlist automatically.
+- [x] A small, rate-limited notice explains blocked navigation without repeatedly distracting the user.
+- [x] Tests cover schemes, hostnames, paths, redirects, rapid navigation, same-scope links, and cross-scope new tabs.
 
 ## 10 — Support exact-page scopes and multiple Chrome tabs
 
