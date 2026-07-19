@@ -5,7 +5,6 @@ import StayPaneCore
 enum NativeBridgeError: Error, Equatable {
     case disconnected
     case targetMissing
-    case multipleTabTargetsUnsupported
     case startConfirmationTimedOut
     case extensionReported(BridgeEnforcementErrorCode)
 }
@@ -17,8 +16,6 @@ extension NativeBridgeError: LocalizedError {
             "The StayPane Chrome extension is disconnected. Connect it before starting a Session with a Tab Target."
         case .targetMissing:
             "The selected Chrome tab is no longer available. Refresh and choose an open tab."
-        case .multipleTabTargetsUnsupported:
-            "This version of StayPane supports one Chrome Tab Target per Session."
         case .startConfirmationTimedOut:
             "The Chrome extension did not confirm Tab Activation Enforcement in time."
         case let .extensionReported(code):
@@ -35,17 +32,38 @@ extension NativeBridgeError: LocalizedError {
 final class NativeBridgeController: TabActivationEnforcing {
     private static let recoveryAvailabilityTimeout: TimeInterval = 5
 
+    private struct TabActivationPlan: Equatable {
+        let configuredTargets: [BrowserTabTarget]
+        var availableTargets: [BrowserTabTarget]
+
+        var profileIdentifier: BrowserProfileIdentifier? {
+            configuredTargets.first?.profileIdentifier
+        }
+
+        mutating func removeAvailableTarget(
+            tabIdentifier: Int
+        ) -> BrowserTabTarget? {
+            let removedTarget = availableTargets.first(where: {
+                $0.tabIdentifier.rawValue == tabIdentifier
+            })
+            availableTargets.removeAll {
+                $0.tabIdentifier.rawValue == tabIdentifier
+            }
+            return removedTarget
+        }
+    }
+
     private enum TabActivationState {
         case idle
-        case awaitingConfirmation(BrowserTabTarget, deadline: Date)
-        case active(BrowserTabTarget)
+        case awaitingConfirmation(TabActivationPlan, deadline: Date)
+        case active(TabActivationPlan)
 
-        var target: BrowserTabTarget? {
+        var plan: TabActivationPlan? {
             switch self {
             case .idle:
                 nil
-            case let .awaitingConfirmation(target, _), let .active(target):
-                target
+            case let .awaitingConfirmation(plan, _), let .active(plan):
+                plan
             }
         }
     }
@@ -69,6 +87,7 @@ final class NativeBridgeController: TabActivationEnforcing {
     var onChange: (() -> Void)?
     var onBlockedTabActivation: (() -> Void)?
     var onBlockedNavigation: (() -> Void)?
+    var onTabTargetClosed: ((TargetIdentifier) -> Void)?
 
     init(
         socketURL: URL = StayPaneBridgeSocketLocation.defaultURL,
@@ -143,9 +162,7 @@ final class NativeBridgeController: TabActivationEnforcing {
 
     func preflight(targets: [BrowserTabTarget]) throws {
         try poll()
-        guard targets.count <= 1 else {
-            throw NativeBridgeError.multipleTabTargetsUnsupported
-        }
+        _ = try selectedProfile(for: targets)
         for target in targets {
             try validateAvailable(target)
         }
@@ -155,7 +172,7 @@ final class NativeBridgeController: TabActivationEnforcing {
         allowing targets: [BrowserTabTarget]
     ) throws -> TabActivationStartResult {
         try preflight(targets: targets)
-        guard let target = targets.first else {
+        guard !targets.isEmpty else {
             tabActivationState = .idle
             enforcementFailure = nil
             return .active
@@ -163,63 +180,64 @@ final class NativeBridgeController: TabActivationEnforcing {
         if let enforcementFailure {
             throw enforcementFailure
         }
-        switch tabActivationState {
-        case let .active(activeTarget)
-            where activeTarget.targetIdentifier == target.targetIdentifier:
-            return .active
-        case let .awaitingConfirmation(pendingTarget, deadline)
-            where pendingTarget.targetIdentifier == target.targetIdentifier:
-            guard now() < deadline else {
-                stop()
-                throw NativeBridgeError.startConfirmationTimedOut
-            }
-            return .awaitingConfirmation
-        case .idle, .active, .awaitingConfirmation:
-            stop()
+        if let result = try existingStartResult(for: targets) {
+            return result
         }
+        stop()
 
-        let profileIdentifier = target.profileIdentifier
+        let profileIdentifier = targets[0].profileIdentifier
         guard let connection = connectionByProfile[profileIdentifier] else {
             throw NativeBridgeError.disconnected
         }
-        enforcementFailure = nil
-        try listener.send(
-            .beginEnforcement(
-                profileIdentifier: profileIdentifier.rawValue,
-                tabIdentifier: target.tabIdentifier.rawValue,
-                windowIdentifier: target.windowIdentifier.rawValue,
-                navigationScope: Self.bridgeNavigationScope(for: target)
-            ),
-            to: connection
+        return try beginEnforcement(
+            configuredTargets: targets,
+            availableTargets: targets,
+            profileIdentifier: profileIdentifier,
+            connection: connection
         )
-        tabActivationState = .awaitingConfirmation(
-            target,
-            deadline: now().addingTimeInterval(2)
-        )
-        return .awaitingConfirmation
     }
 
     func resume(
         allowing targets: [BrowserTabTarget]
     ) throws -> TabActivationStartResult {
-        do {
-            let result = try start(allowing: targets)
+        try poll()
+        if let enforcementFailure {
+            recoveryAvailabilityDeadline = nil
+            throw enforcementFailure
+        }
+        guard !targets.isEmpty else {
+            tabActivationState = .idle
+            recoveryAvailabilityDeadline = nil
+            return .active
+        }
+        if let result = try existingStartResult(for: targets) {
             recoveryAvailabilityDeadline = nil
             return result
-        } catch let error as NativeBridgeError {
-            guard error == .disconnected || error == .targetMissing else {
-                recoveryAvailabilityDeadline = nil
-                throw error
-            }
-            let deadline = recoveryAvailabilityDeadline
-                ?? now().addingTimeInterval(Self.recoveryAvailabilityTimeout)
-            recoveryAvailabilityDeadline = deadline
-            guard now() >= deadline else {
-                return .awaitingAvailability
-            }
-            recoveryAvailabilityDeadline = nil
-            throw error
         }
+        if tabActivationState.plan != nil {
+            let availabilityDeadline = recoveryAvailabilityDeadline
+            stop()
+            recoveryAvailabilityDeadline = availabilityDeadline
+        }
+
+        guard let profileIdentifier = try selectedProfile(for: targets),
+              let connection = connectionByProfile[profileIdentifier]
+        else {
+            return try awaitRecoveryAvailability(orThrow: .disconnected)
+        }
+        let availableTargets = targets.filter(isAvailable)
+        guard !availableTargets.isEmpty else {
+            return try awaitRecoveryAvailability(orThrow: .targetMissing)
+        }
+
+        let result = try beginEnforcement(
+            configuredTargets: targets,
+            availableTargets: availableTargets,
+            profileIdentifier: profileIdentifier,
+            connection: connection
+        )
+        recoveryAvailabilityDeadline = nil
+        return result
     }
 
     func refresh() throws {
@@ -227,18 +245,16 @@ final class NativeBridgeController: TabActivationEnforcing {
         if let enforcementFailure {
             throw enforcementFailure
         }
-        if let target = tabActivationState.target {
-            try validateAvailable(target)
-        }
     }
 
     func stop() {
         recoveryAvailabilityDeadline = nil
-        guard let target = tabActivationState.target else {
+        guard let plan = tabActivationState.plan,
+              let profileIdentifier = plan.profileIdentifier
+        else {
             enforcementFailure = nil
             return
         }
-        let profileIdentifier = target.profileIdentifier
         if let connection = connectionByProfile[profileIdentifier] {
             try? listener.send(
                 .endEnforcement(profileIdentifier: profileIdentifier.rawValue),
@@ -324,20 +340,18 @@ final class NativeBridgeController: TabActivationEnforcing {
                 reject(connection)
                 return true
             }
-            guard let target = tabActivationState.target,
-                  target.profileIdentifier == profile,
-                  target.tabIdentifier.rawValue == tabIdentifier
+            guard let plan = tabActivationState.plan,
+                  plan.profileIdentifier == profile,
+                  plan.availableTargets.contains(where: {
+                      $0.tabIdentifier.rawValue == tabIdentifier
+                  })
             else {
                 return false
             }
             onBlockedNavigation?()
             return false
 
-        case let .tabActivationStarted(
-            profileIdentifier,
-            tabIdentifier,
-            windowIdentifier
-        ):
+        case let .tabTargetClosed(profileIdentifier, tabIdentifier):
             guard let profile = validatedProfile(
                 profileIdentifier,
                 from: connection
@@ -345,18 +359,56 @@ final class NativeBridgeController: TabActivationEnforcing {
                 reject(connection)
                 return true
             }
+            guard let plan = tabActivationState.plan else {
+                return false
+            }
+            guard plan.profileIdentifier == profile else {
+                reject(connection)
+                return true
+            }
+            var updatedPlan = plan
+            let removedTarget = updatedPlan.removeAvailableTarget(
+                tabIdentifier: tabIdentifier
+            )
             switch tabActivationState {
-            case let .awaitingConfirmation(target, _)
-                where target.profileIdentifier == profile
-                    && target.tabIdentifier.rawValue == tabIdentifier
-                    && target.windowIdentifier.rawValue == windowIdentifier:
-                tabActivationState = .active(target)
+            case let .awaitingConfirmation(_, deadline):
+                tabActivationState = .awaitingConfirmation(
+                    updatedPlan,
+                    deadline: deadline
+                )
+            case .active:
+                tabActivationState = .active(updatedPlan)
             case .idle:
                 return false
-            case let .active(target)
-                where target.profileIdentifier == profile
-                    && target.tabIdentifier.rawValue == tabIdentifier
-                    && target.windowIdentifier.rawValue == windowIdentifier:
+            }
+            if let removedTarget {
+                onTabTargetClosed?(removedTarget.targetIdentifier)
+            }
+            return false
+
+        case let .enforcementStarted(profileIdentifier, tabIdentifiers):
+            guard let profile = validatedProfile(
+                profileIdentifier,
+                from: connection
+            ) else {
+                reject(connection)
+                return true
+            }
+            let confirmedIdentifiers = Set(tabIdentifiers)
+            switch tabActivationState {
+            case let .awaitingConfirmation(plan, _)
+                where plan.profileIdentifier == profile
+                    && Set(plan.availableTargets.map {
+                        $0.tabIdentifier.rawValue
+                    }) == confirmedIdentifiers:
+                tabActivationState = .active(plan)
+            case .idle:
+                return false
+            case let .active(plan)
+                where plan.profileIdentifier == profile
+                    && Set(plan.availableTargets.map {
+                        $0.tabIdentifier.rawValue
+                    }) == confirmedIdentifiers:
                 return false
             case .awaitingConfirmation, .active:
                 reject(connection)
@@ -372,7 +424,7 @@ final class NativeBridgeController: TabActivationEnforcing {
                 reject(connection)
                 return true
             }
-            if tabActivationState.target?.profileIdentifier == profile {
+            if tabActivationState.plan?.profileIdentifier == profile {
                 enforcementFailure = .extensionReported(code)
             }
             return false
@@ -382,6 +434,63 @@ final class NativeBridgeController: TabActivationEnforcing {
             reject(connection)
             return true
         }
+    }
+
+    private func existingStartResult(
+        for configuredTargets: [BrowserTabTarget]
+    ) throws -> TabActivationStartResult? {
+        switch tabActivationState {
+        case let .active(plan)
+            where plan.configuredTargets == configuredTargets:
+            return .active
+        case let .awaitingConfirmation(plan, deadline)
+            where plan.configuredTargets == configuredTargets:
+            guard now() < deadline else {
+                stop()
+                throw NativeBridgeError.startConfirmationTimedOut
+            }
+            return .awaitingConfirmation
+        case .idle, .active, .awaitingConfirmation:
+            return nil
+        }
+    }
+
+    private func beginEnforcement(
+        configuredTargets: [BrowserTabTarget],
+        availableTargets: [BrowserTabTarget],
+        profileIdentifier: BrowserProfileIdentifier,
+        connection: BridgeConnectionIdentifier
+    ) throws -> TabActivationStartResult {
+        enforcementFailure = nil
+        try listener.send(
+            .beginEnforcement(
+                profileIdentifier: profileIdentifier.rawValue,
+                targets: try availableTargets.map {
+                    try bridgeEnforcementTarget(for: $0)
+                }
+            ),
+            to: connection
+        )
+        tabActivationState = .awaitingConfirmation(
+            TabActivationPlan(
+                configuredTargets: configuredTargets,
+                availableTargets: availableTargets
+            ),
+            deadline: now().addingTimeInterval(2)
+        )
+        return .awaitingConfirmation
+    }
+
+    private func selectedProfile(
+        for targets: [BrowserTabTarget]
+    ) throws -> BrowserProfileIdentifier? {
+        let profiles = Set(targets.map(\.profileIdentifier))
+        guard profiles.count <= 1,
+              Set(targets.map(\.targetIdentifier)).count == targets.count
+        else {
+            throw NativeBridgeError.disconnected
+        }
+        return profiles.first
     }
 
     private func validateAvailable(_ target: BrowserTabTarget) throws {
@@ -394,13 +503,29 @@ final class NativeBridgeController: TabActivationEnforcing {
         ) != nil else {
             throw NativeBridgeError.targetMissing
         }
-        guard tabsByProfile[profileIdentifier]?.contains(where: {
-            !$0.isIncognito
-                && $0.tabIdentifier == target.tabIdentifier.rawValue
-                && $0.windowIdentifier == target.windowIdentifier.rawValue
-        }) == true else {
+        guard isAvailable(target) else {
             throw NativeBridgeError.targetMissing
         }
+    }
+
+    private func isAvailable(_ target: BrowserTabTarget) -> Bool {
+        tabsByProfile[target.profileIdentifier]?.contains(where: {
+            !$0.isIncognito
+                && $0.tabIdentifier == target.tabIdentifier.rawValue
+        }) == true
+    }
+
+    private func awaitRecoveryAvailability(
+        orThrow error: NativeBridgeError
+    ) throws -> TabActivationStartResult {
+        let deadline = recoveryAvailabilityDeadline
+            ?? now().addingTimeInterval(Self.recoveryAvailabilityTimeout)
+        recoveryAvailabilityDeadline = deadline
+        guard now() >= deadline else {
+            return .awaitingAvailability
+        }
+        recoveryAvailabilityDeadline = nil
+        throw error
     }
 
     private static func eligibleWebURL(from rawValue: String) -> URL? {
@@ -420,7 +545,27 @@ final class NativeBridgeController: TabActivationEnforcing {
         switch target.navigationScope {
         case .currentWebsite:
             .currentWebsite(initialURL: target.url.absoluteString)
+        case .exactPage:
+            .exactPage(initialURL: target.url.absoluteString)
         }
+    }
+
+    private func bridgeEnforcementTarget(
+        for target: BrowserTabTarget
+    ) throws -> BridgeEnforcementTarget {
+        guard let liveTab = tabsByProfile[target.profileIdentifier]?.first(
+            where: {
+                !$0.isIncognito
+                    && $0.tabIdentifier == target.tabIdentifier.rawValue
+            }
+        ) else {
+            throw NativeBridgeError.targetMissing
+        }
+        return BridgeEnforcementTarget(
+            tabIdentifier: target.tabIdentifier.rawValue,
+            windowIdentifier: liveTab.windowIdentifier,
+            navigationScope: Self.bridgeNavigationScope(for: target)
+        )
     }
 
     @discardableResult
@@ -434,7 +579,7 @@ final class NativeBridgeController: TabActivationEnforcing {
         if connectionByProfile[profileIdentifier] == connection {
             connectionByProfile.removeValue(forKey: profileIdentifier)
             tabsByProfile.removeValue(forKey: profileIdentifier)
-            if tabActivationState.target?.profileIdentifier == profileIdentifier {
+            if tabActivationState.plan?.profileIdentifier == profileIdentifier {
                 enforcementFailure = .disconnected
             }
         }

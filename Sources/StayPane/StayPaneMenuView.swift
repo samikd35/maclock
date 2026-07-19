@@ -820,7 +820,7 @@ struct StayPaneMenuView: View {
 
     private var preciseBrowserTabNote: some View {
         Label(
-            "Chrome Tab Targets use Current Website. The chosen tab stays immutable; HTTP and HTTPS pages on its exact hostname are allowed across paths, queries, ports, and fragments. Other hostnames and special schemes return to the Last Allowed Page, while newly opened tabs are transferred or closed.",
+            "Each Chrome Tab Target keeps its own immutable Navigation Scope. Current Website allows HTTP and HTTPS pages on the chosen hostname. Exact Page also locks the path and query while ignoring fragments. Activating an unapproved, duplicated, or newly opened tab is a Blocked Tab Activation.",
             systemImage: "rectangle.stack.badge.person.crop"
         )
         .font(.caption.weight(.medium))
@@ -953,43 +953,70 @@ struct StayPaneMenuView: View {
         _ tab: BrowserTabTarget,
         applicationID: String
     ) -> some View {
-        Toggle(
-            isOn: Binding(
-                get: {
-                    model.selectedBrowserTabIDs.contains(tab.targetIdentifier)
-                },
-                set: {
-                    model.setBrowserTab(
-                        id: tab.targetIdentifier,
-                        isSelected: $0
-                    )
+        VStack(alignment: .leading, spacing: 5) {
+            Toggle(
+                isOn: Binding(
+                    get: {
+                        model.selectedBrowserTabIDs.contains(tab.targetIdentifier)
+                    },
+                    set: {
+                        model.setBrowserTab(
+                            id: tab.targetIdentifier,
+                            isSelected: $0
+                        )
+                    }
+                )
+            ) {
+                HStack(spacing: 7) {
+                    if let faviconData = tab.faviconPNGData,
+                       let favicon = NSImage(data: faviconData) {
+                        Image(nsImage: favicon)
+                            .resizable()
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "globe")
+                            .frame(width: 16, height: 16)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(tab.title)
+                            .lineLimit(1)
+                        Text(tab.url.host ?? tab.url.absoluteString)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
-            )
-        ) {
-            HStack(spacing: 7) {
-                if let faviconData = tab.faviconPNGData,
-                   let favicon = NSImage(data: faviconData) {
-                    Image(nsImage: favicon)
-                        .resizable()
-                        .frame(width: 16, height: 16)
-                } else {
-                    Image(systemName: "globe")
-                        .frame(width: 16, height: 16)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(tab.title)
-                        .lineLimit(1)
-                    Text(
-                        "Current Website • \(tab.url.host ?? tab.url.absoluteString)"
-                    )
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                .font(.subheadline)
             }
-            .font(.subheadline)
+            .toggleStyle(.checkbox)
+
+            if model.selectedBrowserTabIDs.contains(tab.targetIdentifier) {
+                Picker(
+                    "Navigation scope",
+                    selection: Binding(
+                        get: {
+                            model.browserNavigationScope(
+                                for: tab.targetIdentifier
+                            )
+                        },
+                        set: {
+                            model.setBrowserNavigationScope(
+                                $0,
+                                for: tab.targetIdentifier
+                            )
+                        }
+                    )
+                ) {
+                    Text("Current Website")
+                        .tag(BrowserNavigationScope.currentWebsite)
+                    Text("Exact Page")
+                        .tag(BrowserNavigationScope.exactPage)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.leading, 24)
+            }
         }
-        .toggleStyle(.checkbox)
         .disabled(model.selectedApplicationIDs.contains(applicationID))
     }
 
@@ -1072,12 +1099,38 @@ struct StayPaneMenuView: View {
             )
         case let .browserTab(tab):
             TargetPresentation(
-                label: "\(tab.title) in \(tab.application.displayName)",
+                label: "\(tab.title) (\(browserScopeName(tab.navigationScope))) in \(tab.application.displayName)",
                 reviewTitle: "Individual Chrome tab",
-                reviewValue: "\(tab.title) — Current Website: \(tab.url.host ?? tab.url.absoluteString)",
+                reviewValue: "\(tab.title) — \(browserScopeName(tab.navigationScope)): \(browserScopeValue(tab))",
                 systemImage: "rectangle.stack",
                 isBroadApplication: false
             )
+        }
+    }
+
+    private func browserScopeName(_ scope: BrowserNavigationScope) -> String {
+        switch scope {
+        case .currentWebsite:
+            "Current Website"
+        case .exactPage:
+            "Exact Page"
+        }
+    }
+
+    private func browserScopeValue(_ tab: BrowserTabTarget) -> String {
+        switch tab.navigationScope {
+        case .currentWebsite:
+            return tab.url.host ?? tab.url.absoluteString
+        case .exactPage:
+            guard let components = URLComponents(
+                url: tab.url,
+                resolvingAgainstBaseURL: false
+            ) else {
+                return tab.url.absoluteString
+            }
+            return (components.host ?? "")
+                + components.path
+                + (components.percentEncodedQuery.map { "?\($0)" } ?? "")
         }
     }
 

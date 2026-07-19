@@ -72,17 +72,22 @@ test("tab activation storage is isolated behind its port", async () => {
   };
   const enforcement = {
     profileId: "profile_one",
-    tabId: 41,
-    windowId: 9,
-    navigationScope: {
-      type: "currentWebsite",
-      hostname: "work.example",
-      lastAllowedUrl: "https://work.example/project",
-      pendingNavigation: {
-        documentId: "document-project",
-        url: "https://work.example/project?view=board",
+    availableTargets: [
+      {
+        tabId: 41,
+        windowId: 9,
+        navigationScope: {
+          type: "currentWebsite",
+          hostname: "work.example",
+          lastAllowedUrl: "https://work.example/project",
+          pendingNavigation: {
+            documentId: "document-project",
+            url: "https://work.example/project?view=board",
+          },
+        },
       },
-    },
+    ],
+    lastActivatedAvailableTabId: 41,
   };
 
   await saveTabActivationEnforcement(enforcement, store);
@@ -118,6 +123,51 @@ test("invalid persisted Current Website state is cleared", async () => {
 
   assert.equal(await loadTabActivationEnforcement(store), null);
   assert.deepEqual(values, {});
+});
+
+test("multi-tab enforcement storage preserves independent mixed scopes", async () => {
+  const values = {};
+  const store = {
+    async get() {
+      return { ...values };
+    },
+    async set(items) {
+      Object.assign(values, items);
+    },
+    async remove(key) {
+      delete values[key];
+    },
+  };
+  const enforcement = {
+    profileId: "profile_one",
+    availableTargets: [
+      {
+        tabId: 41,
+        windowId: 9,
+        navigationScope: {
+          type: "currentWebsite",
+          hostname: "work.example",
+          lastAllowedUrl: "https://work.example/project",
+        },
+      },
+      {
+        tabId: 42,
+        windowId: 10,
+        navigationScope: {
+          type: "exactPage",
+          hostname: "docs.example",
+          pathname: "/reference",
+          search: "?v=1",
+          lastAllowedUrl: "https://docs.example/reference?v=1#heading",
+        },
+      },
+    ],
+    lastActivatedAvailableTabId: 41,
+  };
+
+  await saveTabActivationEnforcement(enforcement, store);
+
+  assert.deepEqual(await loadTabActivationEnforcement(store), enforcement);
 });
 
 test("tab snapshots use injected Chrome and favicon ports", async () => {

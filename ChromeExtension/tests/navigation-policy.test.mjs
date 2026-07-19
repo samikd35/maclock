@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  completeCurrentWebsiteNavigation,
+  completeNavigationScope,
+  canStartNavigationEnforcement,
   canStartCurrentWebsiteEnforcement,
+  createExactPageScope,
   createCurrentWebsiteScope,
   createStartingCurrentWebsiteScope,
+  createStartingNavigationScope,
   decideCommittedNavigation,
   decideOpenedTab,
   isWithinCurrentWebsite,
+  isWithinNavigationScope,
 } from "../dist/navigation-policy.js";
 
 test("Current Website accepts only HTTP and HTTPS on the exact hostname", () => {
@@ -33,6 +37,56 @@ test("Current Website accepts only HTTP and HTTPS on the exact hostname", () => 
   ]) {
     assert.equal(isWithinCurrentWebsite(scope, candidate), false, candidate);
   }
+});
+
+test("Exact Page matches hostname, path, and query while ignoring fragments", () => {
+  const scope = createExactPageScope(
+    "https://docs.example/reference/item?v=1&mode=read#overview",
+  );
+
+  for (const candidate of [
+    "https://docs.example/reference/item?v=1&mode=read#details",
+    "http://docs.example:8080/reference/item?v=1&mode=read",
+  ]) {
+    assert.equal(isWithinNavigationScope(scope, candidate), true, candidate);
+  }
+  for (const candidate of [
+    "https://guide.docs.example/reference/item?v=1&mode=read",
+    "https://docs.example/reference/other?v=1&mode=read",
+    "https://docs.example/reference/item?v=2&mode=read",
+    "https://docs.example/reference/item?mode=read&v=1",
+  ]) {
+    assert.equal(isWithinNavigationScope(scope, candidate), false, candidate);
+  }
+});
+
+test("Exact Page permits reload but restores after a path or query change", () => {
+  const scope = createExactPageScope(
+    "https://docs.example/reference/item?v=1#overview",
+  );
+  const reload = decideCommittedNavigation({
+    scope,
+    candidateUrl: "https://docs.example/reference/item?v=1#overview",
+    documentId: "reload",
+    now: 10_000,
+    lastFeedbackAt: null,
+    feedbackIntervalMs: 2_000,
+  });
+  const changedQuery = decideCommittedNavigation({
+    scope,
+    candidateUrl: "https://docs.example/reference/item?v=2",
+    documentId: "changed-query",
+    now: 10_000,
+    lastFeedbackAt: null,
+    feedbackIntervalMs: 2_000,
+  });
+
+  assert.equal(reload.kind, "allow");
+  assert.equal(changedQuery.kind, "restore");
+  assert.equal(
+    changedQuery.restoreUrl,
+    "https://docs.example/reference/item?v=1#overview",
+  );
 });
 
 test("start promotes only a fully completed live page", () => {
@@ -70,6 +124,41 @@ test("start promotes only a fully completed live page", () => {
     canStartCurrentWebsiteEnforcement({
       initialUrl: "https://work.example/stable",
       liveUrl: "https://video.example/loading",
+      liveDocumentIsComplete: false,
+    }),
+    true,
+  );
+});
+
+test("Exact Page start preserves its original path and query policy", () => {
+  const input = {
+    type: "exactPage",
+    initialUrl: "https://docs.example/reference?v=1#overview",
+    liveUrl: "https://docs.example/reference?v=1#details",
+    liveDocumentIsComplete: true,
+  };
+  const scope = createStartingNavigationScope(input);
+
+  assert.equal(scope.type, "exactPage");
+  assert.equal(scope.pathname, "/reference");
+  assert.equal(scope.search, "?v=1");
+  assert.equal(
+    scope.lastAllowedUrl,
+    "https://docs.example/reference?v=1#details",
+  );
+  assert.equal(canStartNavigationEnforcement(input), true);
+  assert.equal(
+    canStartNavigationEnforcement({
+      ...input,
+      liveUrl: "https://docs.example/reference?v=1#loading",
+      liveDocumentIsComplete: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canStartNavigationEnforcement({
+      ...input,
+      liveUrl: "https://docs.example/reference?v=2",
       liveDocumentIsComplete: false,
     }),
     true,
@@ -114,14 +203,14 @@ test("Last Allowed Page advances only after the matching document completes", ()
   });
   assert.equal(committed.kind, "allow");
 
-  const stale = completeCurrentWebsiteNavigation(
+  const stale = completeNavigationScope(
     committed.nextScope,
     "document-one",
     "https://work.example/projects/one",
   );
   assert.deepEqual(stale, committed.nextScope);
 
-  const completed = completeCurrentWebsiteNavigation(
+  const completed = completeNavigationScope(
     committed.nextScope,
     "document-two",
     "https://work.example/projects/two?view=list",

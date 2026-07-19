@@ -24,8 +24,9 @@ public struct BrowserWindowIdentifier: RawRepresentable, Codable, Equatable, Has
     }
 }
 
-public enum BrowserNavigationScope: String, Codable, Equatable, Hashable, Sendable {
+public enum BrowserNavigationScope: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
     case currentWebsite
+    case exactPage
 }
 
 public struct BrowserTabTarget: Codable, Equatable, Hashable, Sendable {

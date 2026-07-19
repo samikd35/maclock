@@ -109,18 +109,21 @@ import Testing
         try client.readNextMessage()
             == .beginEnforcement(
                 profileIdentifier: profileIdentifier,
-                tabIdentifier: 12,
-                windowIdentifier: 4,
-                navigationScope: .currentWebsite(
-                    initialURL: "https://www.swift.org/documentation/"
-                )
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 12,
+                        windowIdentifier: 4,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://www.swift.org/documentation/"
+                        )
+                    )
+                ]
             )
     )
     try client.send(
-        .tabActivationStarted(
+        .enforcementStarted(
             profileIdentifier: profileIdentifier,
-            tabIdentifier: 12,
-            windowIdentifier: 4
+            tabIdentifiers: [12]
         )
     )
     try controller.poll()
@@ -138,6 +141,124 @@ import Testing
     )
     try controller.poll()
     #expect(blockedNavigationCount == 1)
+
+    controller.stop()
+    #expect(
+        try client.readNextMessage()
+            == .endEnforcement(profileIdentifier: profileIdentifier)
+    )
+}
+
+@MainActor
+@Test func nativeBridgeAtomicallyStartsMixedScopesAndShrinksOnClosure() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    let profileIdentifier = "profile-multiple"
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: profileIdentifier
+        )
+    )
+    try controller.poll()
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profileIdentifier,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 31,
+                    windowIdentifier: 7,
+                    title: "Project",
+                    url: "https://work.example/project",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                ),
+                BridgeTabSnapshot(
+                    tabIdentifier: 32,
+                    windowIdentifier: 8,
+                    title: "Reference",
+                    url: "https://docs.example/reference?v=1#heading",
+                    faviconDataURL: nil,
+                    isActive: false,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    try controller.poll()
+    let chrome = ApplicationTarget(
+        displayName: "Google Chrome",
+        bundleIdentifier: "com.google.Chrome"
+    )
+    let targets = controller.targets(for: chrome)
+    let website = try #require(targets.first(where: {
+        $0.tabIdentifier.rawValue == 31
+    }))
+    let exactSnapshot = try #require(targets.first(where: {
+        $0.tabIdentifier.rawValue == 32
+    }))
+    let exactPage = BrowserTabTarget(
+        profileIdentifier: exactSnapshot.profileIdentifier,
+        tabIdentifier: exactSnapshot.tabIdentifier,
+        windowIdentifier: exactSnapshot.windowIdentifier,
+        title: exactSnapshot.title,
+        url: exactSnapshot.url,
+        faviconPNGData: exactSnapshot.faviconPNGData,
+        application: exactSnapshot.application,
+        navigationScope: .exactPage
+    )
+
+    try controller.preflight(targets: [website, exactPage])
+    #expect(
+        try controller.start(allowing: [website, exactPage])
+            == .awaitingConfirmation
+    )
+    #expect(
+        try client.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: profileIdentifier,
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 31,
+                        windowIdentifier: 7,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://work.example/project"
+                        )
+                    ),
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 32,
+                        windowIdentifier: 8,
+                        navigationScope: .exactPage(
+                            initialURL: "https://docs.example/reference?v=1#heading"
+                        )
+                    )
+                ]
+            )
+    )
+    try client.send(
+        .enforcementStarted(
+            profileIdentifier: profileIdentifier,
+            tabIdentifiers: [31, 32]
+        )
+    )
+    try controller.poll()
+    #expect(try controller.start(allowing: [website, exactPage]) == .active)
+
+    var closedTarget: TargetIdentifier?
+    controller.onTabTargetClosed = { closedTarget = $0 }
+    try client.send(
+        .tabTargetClosed(
+            profileIdentifier: profileIdentifier,
+            tabIdentifier: 31
+        )
+    )
+    try controller.poll()
+    #expect(closedTarget == website.targetIdentifier)
+    try controller.refresh()
 
     controller.stop()
     #expect(
@@ -215,14 +336,86 @@ import Testing
     )
     _ = try client.readNextMessage()
     try client.send(
-        .tabActivationStarted(
+        .enforcementStarted(
             profileIdentifier: "profile-late",
-            tabIdentifier: 1,
-            windowIdentifier: 1
+            tabIdentifiers: [1]
         )
     )
     try controller.poll()
     #expect(try controller.resume(allowing: [target]) == .active)
+}
+
+@MainActor
+@Test func recoveryResumesRemainingTabsAfterASelectedTabWasClosed() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    let profileIdentifier = "profile-partial-recovery"
+    let remaining = try savedBrowserTarget(
+        profileIdentifier: profileIdentifier,
+        tabIdentifier: 1,
+        windowIdentifier: 7
+    )
+    let closed = try savedBrowserTarget(
+        profileIdentifier: profileIdentifier,
+        tabIdentifier: 2,
+        windowIdentifier: 8
+    )
+
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: profileIdentifier
+        )
+    )
+    try controller.poll()
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profileIdentifier,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 1,
+                    windowIdentifier: 12,
+                    title: "Remaining tab",
+                    url: "https://example.com",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+
+    let result = try controller.resume(allowing: [remaining, closed])
+    try #require(result == .awaitingConfirmation)
+    #expect(
+        try client.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: profileIdentifier,
+                targets: [
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 1,
+                        windowIdentifier: 12,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://example.com"
+                        )
+                    )
+                ]
+            )
+    )
+    try client.send(
+        .enforcementStarted(
+            profileIdentifier: profileIdentifier,
+            tabIdentifiers: [1]
+        )
+    )
+    try controller.poll()
+
+    #expect(
+        try controller.resume(allowing: [remaining, closed]) == .active
+    )
 }
 
 @MainActor
@@ -374,10 +567,9 @@ import Testing
     )
     _ = try client?.readNextMessage()
     try client?.send(
-        .tabActivationStarted(
+        .enforcementStarted(
             profileIdentifier: profileIdentifier,
-            tabIdentifier: 8,
-            windowIdentifier: 3
+            tabIdentifiers: [8]
         )
     )
     try controller.poll()
@@ -398,14 +590,16 @@ private func temporaryBridgeSocketURL() -> URL {
 }
 
 private func savedBrowserTarget(
-    profileIdentifier: String
+    profileIdentifier: String,
+    tabIdentifier: Int = 1,
+    windowIdentifier: Int = 1
 ) throws -> BrowserTabTarget {
     BrowserTabTarget(
         profileIdentifier: BrowserProfileIdentifier(
             rawValue: profileIdentifier
         ),
-        tabIdentifier: BrowserTabIdentifier(rawValue: 1),
-        windowIdentifier: BrowserWindowIdentifier(rawValue: 1),
+        tabIdentifier: BrowserTabIdentifier(rawValue: tabIdentifier),
+        windowIdentifier: BrowserWindowIdentifier(rawValue: windowIdentifier),
         title: "Saved tab",
         url: try #require(URL(string: "https://example.com")),
         faviconPNGData: nil,

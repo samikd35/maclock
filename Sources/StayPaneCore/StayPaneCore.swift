@@ -153,15 +153,31 @@ public struct TargetSelectionPolicy: Equatable, Sendable {
             return true
 
         case let .browserTab(tab):
-            let insertionIndex = targets.firstIndex {
+            if let index = targets.firstIndex(where: { $0.id == target.id }) {
+                targets[index] = target
+                return true
+            }
+            let broadInsertionIndex = targets.firstIndex {
                 $0.bundleIdentifier == tab.application.bundleIdentifier
             }
             targets.removeAll {
-                $0.bundleIdentifier == tab.application.bundleIdentifier
+                guard $0.bundleIdentifier
+                    == tab.application.bundleIdentifier
+                else {
+                    return false
+                }
+                if case .browserTab = $0 {
+                    return false
+                }
+                return true
             }
+            let insertionIndex = targets.lastIndex {
+                $0.bundleIdentifier == tab.application.bundleIdentifier
+            }.map { targets.index(after: $0) }
+                ?? min(broadInsertionIndex ?? targets.endIndex, targets.endIndex)
             targets.insert(
                 target,
-                at: min(insertionIndex ?? targets.endIndex, targets.endIndex)
+                at: insertionIndex
             )
             return true
         }

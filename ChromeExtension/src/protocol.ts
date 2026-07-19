@@ -3,18 +3,18 @@ import {
   requireProfileIdentifier,
 } from "./identifiers.js";
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 export const EXTENSION_ID = "hoofhoedlagpoclhkgnkmejaihaapoke";
 export const NATIVE_HOST_NAME = "com.staypane.native_bridge";
 
 export type HelloAcknowledged = {
-  version: 2;
+  version: 3;
   type: "helloAck";
   profileId: string;
 };
 
 export type RequestTabs = {
-  version: 2;
+  version: 3;
   type: "requestTabs";
   profileId: string;
 };
@@ -24,17 +24,30 @@ export type CurrentWebsiteScopeCommand = {
   initialUrl: string;
 };
 
-export type BeginEnforcement = {
-  version: 2;
-  type: "beginEnforcement";
-  profileId: string;
+export type ExactPageScopeCommand = {
+  type: "exactPage";
+  initialUrl: string;
+};
+
+export type NavigationScopeCommand =
+  | CurrentWebsiteScopeCommand
+  | ExactPageScopeCommand;
+
+export type EnforcementTargetCommand = {
   tabId: number;
   windowId: number;
-  navigationScope: CurrentWebsiteScopeCommand;
+  navigationScope: NavigationScopeCommand;
+};
+
+export type BeginEnforcement = {
+  version: 3;
+  type: "beginEnforcement";
+  profileId: string;
+  targets: EnforcementTargetCommand[];
 };
 
 export type EndEnforcement = {
-  version: 2;
+  version: 3;
   type: "endEnforcement";
   profileId: string;
 };
@@ -124,17 +137,17 @@ export function makeTabActivated(
 export function makeBlockedTabActivation(
   profileId: string,
   attemptedTabId: number,
-  allowedTabId: number,
+  availableTabId: number,
 ) {
   requireProfileIdentifier(profileId);
   requireChromeIdentifier(attemptedTabId);
-  requireChromeIdentifier(allowedTabId);
+  requireChromeIdentifier(availableTabId);
   return {
     version: PROTOCOL_VERSION,
     type: "blockedTabActivation" as const,
     profileId,
     attemptedTabId,
-    allowedTabId,
+    availableTabId,
   };
 }
 
@@ -149,20 +162,28 @@ export function makeBlockedNavigation(profileId: string, tabId: number) {
   };
 }
 
-export function makeTabActivationStarted(
+export function makeEnforcementStarted(
   profileId: string,
-  tabId: number,
-  windowId: number,
+  tabIds: number[],
 ) {
   requireProfileIdentifier(profileId);
-  requireChromeIdentifier(tabId);
-  requireChromeIdentifier(windowId);
+  requireUniqueChromeIdentifiers(tabIds);
   return {
     version: PROTOCOL_VERSION,
-    type: "tabActivationStarted" as const,
+    type: "enforcementStarted" as const,
+    profileId,
+    tabIds,
+  };
+}
+
+export function makeTabTargetClosed(profileId: string, tabId: number) {
+  requireProfileIdentifier(profileId);
+  requireChromeIdentifier(tabId);
+  return {
+    version: PROTOCOL_VERSION,
+    type: "tabTargetClosed" as const,
     profileId,
     tabId,
-    windowId,
   };
 }
 
@@ -209,17 +230,13 @@ export function parseNativeMessage(value: unknown): NativeMessage {
         "version",
         "type",
         "profileId",
-        "tabId",
-        "windowId",
-        "navigationScope",
+        "targets",
       ]);
       return {
         version: PROTOCOL_VERSION,
         type: "beginEnforcement",
         profileId: requireProfileIdentifier(record.profileId),
-        tabId: requireChromeIdentifier(record.tabId),
-        windowId: requireChromeIdentifier(record.windowId),
-        navigationScope: requireCurrentWebsiteScope(record.navigationScope),
+        targets: requireEnforcementTargets(record.targets),
       };
     case "endEnforcement":
       requireExactKeys(record, ["version", "type", "profileId"]);
@@ -233,20 +250,23 @@ export function parseNativeMessage(value: unknown): NativeMessage {
   }
 }
 
-function requireCurrentWebsiteScope(
+function requireNavigationScope(
   value: unknown,
-): CurrentWebsiteScopeCommand {
+): NavigationScopeCommand {
   const record = requireRecord(value);
   requireExactKeys(record, ["type", "initialUrl"]);
-  if (record.type !== "currentWebsite" || typeof record.initialUrl !== "string") {
-    throw new Error("Invalid Current Website scope");
+  if (
+    (record.type !== "currentWebsite" && record.type !== "exactPage") ||
+    typeof record.initialUrl !== "string"
+  ) {
+    throw new Error("Invalid Navigation Scope");
   }
   const encoded = new TextEncoder().encode(record.initialUrl);
   let parsed: URL;
   try {
     parsed = new URL(record.initialUrl);
   } catch {
-    throw new Error("Invalid Current Website URL");
+    throw new Error("Invalid Navigation Scope URL");
   }
   if (
     encoded.length === 0 ||
@@ -254,12 +274,41 @@ function requireCurrentWebsiteScope(
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     parsed.hostname.length === 0
   ) {
-    throw new Error("Invalid Current Website URL");
+    throw new Error("Invalid Navigation Scope URL");
   }
   return {
-    type: "currentWebsite",
+    type: record.type,
     initialUrl: record.initialUrl,
   };
+}
+
+function requireEnforcementTargets(value: unknown): EnforcementTargetCommand[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 128) {
+    throw new Error("Invalid enforcement targets");
+  }
+  const targets = value.map((candidate) => {
+    const record = requireRecord(candidate);
+    requireExactKeys(record, ["tabId", "windowId", "navigationScope"]);
+    return {
+      tabId: requireChromeIdentifier(record.tabId),
+      windowId: requireChromeIdentifier(record.windowId),
+      navigationScope: requireNavigationScope(record.navigationScope),
+    };
+  });
+  requireUniqueChromeIdentifiers(targets.map((target) => target.tabId));
+  return targets;
+}
+
+function requireUniqueChromeIdentifiers(values: number[]): void {
+  if (values.length === 0 || values.length > 128) {
+    throw new Error("Invalid Chrome identifier set");
+  }
+  for (const value of values) {
+    requireChromeIdentifier(value);
+  }
+  if (new Set(values).size !== values.length) {
+    throw new Error("Duplicate Chrome identifier");
+  }
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

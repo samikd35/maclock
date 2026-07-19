@@ -4,7 +4,7 @@ import Testing
 
 @Test func handshakeMessageRoundTripsThroughTheVersionedContract() throws {
     let json = Data(
-        #"{"version":2,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#.utf8
+        #"{"version":3,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#.utf8
     )
 
     let message = try BridgeMessageCodec.decode(json)
@@ -43,11 +43,10 @@ import Testing
     #expect(decoded.direction == .extensionToNative)
 }
 
-@Test func tabActivationStartConfirmationRoundTripsTowardTheMacApp() throws {
-    let message = BridgeMessage.tabActivationStarted(
+@Test func multiTabStartConfirmationRoundTripsTowardTheMacApp() throws {
+    let message = BridgeMessage.enforcementStarted(
         profileIdentifier: "profile-one",
-        tabIdentifier: 41,
-        windowIdentifier: 9
+        tabIdentifiers: [41, 42]
     )
 
     #expect(
@@ -57,14 +56,25 @@ import Testing
     #expect(message.direction == .extensionToNative)
 }
 
-@Test func currentWebsiteScopeRoundTripsTowardTheChromeExtension() throws {
+@Test func mixedNavigationScopesRoundTripInOneAtomicStartCommand() throws {
     let message = BridgeMessage.beginEnforcement(
         profileIdentifier: "profile-one",
-        tabIdentifier: 41,
-        windowIdentifier: 9,
-        navigationScope: .currentWebsite(
-            initialURL: "https://work.example/project?view=board"
-        )
+        targets: [
+            BridgeEnforcementTarget(
+                tabIdentifier: 41,
+                windowIdentifier: 9,
+                navigationScope: .currentWebsite(
+                    initialURL: "https://work.example/project?view=board"
+                )
+            ),
+            BridgeEnforcementTarget(
+                tabIdentifier: 42,
+                windowIdentifier: 10,
+                navigationScope: .exactPage(
+                    initialURL: "https://docs.example/reference?v=1#heading"
+                )
+            )
+        ]
     )
 
     #expect(
@@ -72,6 +82,18 @@ import Testing
             == message
     )
     #expect(message.direction == .nativeToExtension)
+}
+
+@Test func closedTabTargetNoticeRoundTripsWithoutBrowsingContent() throws {
+    let message = BridgeMessage.tabTargetClosed(
+        profileIdentifier: "profile-one",
+        tabIdentifier: 41
+    )
+
+    let encoded = try BridgeMessageCodec.encode(message)
+
+    #expect(try BridgeMessageCodec.decode(encoded) == message)
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("http"))
 }
 
 @Test func blockedNavigationNoticeCarriesNoBrowsingContent() throws {
@@ -85,6 +107,19 @@ import Testing
     #expect(try BridgeMessageCodec.decode(encoded) == message)
     #expect(message.direction == .extensionToNative)
     #expect(!String(decoding: encoded, as: UTF8.self).contains("https"))
+}
+
+@Test func blockedActivationNamesTheAvailableTabTarget() throws {
+    let message = BridgeMessage.blockedTabActivation(
+        profileIdentifier: "profile-one",
+        attemptedTabIdentifier: 90,
+        availableTabIdentifier: 41
+    )
+
+    #expect(
+        try BridgeMessageCodec.decode(BridgeMessageCodec.encode(message))
+            == message
+    )
 }
 
 @Test func loadingTabFailureRoundTripsWithoutBrowsingContent() throws {
@@ -101,13 +136,13 @@ import Testing
 
 @Test(arguments: [
     #"{"version":1,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#,
-    #"{"version":2,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
-    #"{"version":2,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
-    #"{"version":2,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
-    #"{"version":2,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
-    #"{"version":2,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
-    #"{"version":2,"type":"beginEnforcement","profileId":"profile-one","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}"#,
-    #"{"version":2,"type":"unknown"}"#
+    #"{"version":3,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
+    #"{"version":3,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
+    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
+    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
+    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
+    #"{"version":3,"type":"beginEnforcement","profileId":"profile-one","targets":[{"tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}]}"#,
+    #"{"version":3,"type":"unknown"}"#
 ])
 func malformedNativeMessagesAreRejected(_ json: String) {
     #expect(throws: BridgeProtocolError.self) {
@@ -134,7 +169,7 @@ func malformedNativeMessagesAreRejected(_ json: String) {
 }
 
 @Test func nativeFramingWaitsForCompleteMessagesAndRejectsOversizeInput() throws {
-    let payload = Data(#"{"version":2,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
+    let payload = Data(#"{"version":3,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
     let framed = try NativeMessageFramer.frame(payload)
     var incomplete = Data(framed.dropLast())
 

@@ -21,7 +21,7 @@ The local Chrome configuration that permits only the expected unpacked extension
 _Avoid_: Extension install, account setup, server registration
 
 **Navigation Scope Command**:
-A versioned Native Bridge command that starts enforcement for an exact Tab Target with its immutable Navigation Scope and initial web URL.
+A versioned Native Bridge command that atomically starts enforcement for every selected Tab Target with each target's immutable Navigation Scope and initial web URL.
 _Avoid_: Website history, remote rule, browsing configuration
 
 **Blocked Navigation Notice**:

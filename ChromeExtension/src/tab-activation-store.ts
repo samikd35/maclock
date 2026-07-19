@@ -3,17 +3,22 @@ import {
   isValidProfileIdentifier,
 } from "./identifiers.js";
 import {
-  CurrentWebsiteScope,
-  isValidCurrentWebsiteScope,
+  NavigationScope,
+  isValidNavigationScope,
 } from "./navigation-policy.js";
 
 const STORAGE_KEY = "stayPaneTabActivationEnforcement";
 
-export type TabActivationEnforcement = {
-  profileId: string;
+export type AvailableTabTarget = {
   tabId: number;
   windowId: number;
-  navigationScope: CurrentWebsiteScope;
+  navigationScope: NavigationScope;
+};
+
+export type TabActivationEnforcement = {
+  profileId: string;
+  availableTargets: AvailableTabTarget[];
+  lastActivatedAvailableTabId: number | null;
 };
 
 export type TabActivationStorePort = {
@@ -43,21 +48,64 @@ export async function loadTabActivationEnforcement(
   if (typeof candidate !== "object" || candidate === null) {
     return null;
   }
-  const value = candidate as Partial<TabActivationEnforcement>;
-  if (
-    !isValidProfileIdentifier(value.profileId) ||
-    !isValidChromeIdentifier(value.tabId) ||
-    !isValidChromeIdentifier(value.windowId) ||
-    !isValidCurrentWebsiteScope(value.navigationScope)
-  ) {
+  if (!isValidTabActivationEnforcement(candidate)) {
     await clearTabActivationEnforcement(store);
     return null;
   }
-  return value as TabActivationEnforcement;
+  return candidate;
 }
 
 export async function clearTabActivationEnforcement(
   store: TabActivationStorePort = chromeSessionStore,
 ): Promise<void> {
   await store.remove(STORAGE_KEY);
+}
+
+function isValidTabActivationEnforcement(
+  value: object,
+): value is TabActivationEnforcement {
+  const candidate = value as Record<string, unknown>;
+  if (
+    Object.keys(candidate).sort().join(",") !==
+      "availableTargets,lastActivatedAvailableTabId,profileId" ||
+    !isValidProfileIdentifier(candidate.profileId) ||
+    !Array.isArray(candidate.availableTargets) ||
+    candidate.availableTargets.length > 128 ||
+    !(
+      candidate.lastActivatedAvailableTabId === null ||
+      isValidChromeIdentifier(candidate.lastActivatedAvailableTabId)
+    )
+  ) {
+    return false;
+  }
+  const seenTabIdentifiers = new Set<number>();
+  for (const target of candidate.availableTargets) {
+    if (!isValidAvailableTabTarget(target)) {
+      return false;
+    }
+    if (seenTabIdentifiers.has(target.tabId)) {
+      return false;
+    }
+    seenTabIdentifiers.add(target.tabId);
+  }
+  return (
+    candidate.lastActivatedAvailableTabId === null ||
+    seenTabIdentifiers.has(candidate.lastActivatedAvailableTabId)
+  );
+}
+
+function isValidAvailableTabTarget(
+  value: unknown,
+): value is AvailableTabTarget {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    Object.keys(candidate).sort().join(",") ===
+      "navigationScope,tabId,windowId" &&
+    isValidChromeIdentifier(candidate.tabId) &&
+    isValidChromeIdentifier(candidate.windowId) &&
+    isValidNavigationScope(candidate.navigationScope)
+  );
 }

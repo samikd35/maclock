@@ -125,7 +125,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         nativeBridge?.onBlockedNavigation = { [weak self] in
             self?.recordDiagnostic(.blockedTarget)
             self?.showNotice(
-                "StayPane returned the selected Chrome tab to its Current Website."
+                "StayPane returned the selected Chrome Tab Target to its Navigation Scope."
+            )
+        }
+        nativeBridge?.onTabTargetClosed = { [weak self] _ in
+            self?.showNotice(
+                "A selected Chrome tab was closed. The Session is still running with its remaining targets."
             )
         }
 
@@ -411,6 +416,44 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         } else {
             engine.deselectTarget(id)
         }
+        synchronizeWithEngine()
+    }
+
+    func browserNavigationScope(
+        for id: TargetIdentifier
+    ) -> BrowserNavigationScope {
+        configuredTargets.first(where: { $0.id == id }).flatMap { target in
+            guard case let .browserTab(tab) = target else {
+                return nil
+            }
+            return tab.navigationScope
+        } ?? .currentWebsite
+    }
+
+    func setBrowserNavigationScope(
+        _ navigationScope: BrowserNavigationScope,
+        for id: TargetIdentifier
+    ) {
+        guard case .browserTab = id,
+              let selected = configuredTargets.first(where: { $0.id == id }),
+              case let .browserTab(tab) = selected
+        else {
+            return
+        }
+        engine.select(
+            target: .browserTab(
+                BrowserTabTarget(
+                    profileIdentifier: tab.profileIdentifier,
+                    tabIdentifier: tab.tabIdentifier,
+                    windowIdentifier: tab.windowIdentifier,
+                    title: tab.title,
+                    url: tab.url,
+                    faviconPNGData: tab.faviconPNGData,
+                    application: tab.application,
+                    navigationScope: navigationScope
+                )
+            )
+        )
         synchronizeWithEngine()
     }
 
@@ -995,9 +1038,21 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 guard case let .browserTab(selected) = target else {
                     return nil
                 }
-                return refreshed.values.joined().first(where: {
+                guard let live = refreshed.values.joined().first(where: {
                     $0.targetIdentifier == selected.targetIdentifier
-                })
+                }) else {
+                    return nil
+                }
+                return BrowserTabTarget(
+                    profileIdentifier: live.profileIdentifier,
+                    tabIdentifier: live.tabIdentifier,
+                    windowIdentifier: live.windowIdentifier,
+                    title: live.title,
+                    url: live.url,
+                    faviconPNGData: live.faviconPNGData,
+                    application: live.application,
+                    navigationScope: selected.navigationScope
+                )
             }
             for replacement in replacements {
                 engine.select(target: .browserTab(replacement))

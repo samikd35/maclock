@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CurrentWebsiteNavigationEnforcer } from "../dist/navigation-enforcement.js";
-import { createCurrentWebsiteScope } from "../dist/navigation-policy.js";
+import { ChromeTabEnforcementCoordinator } from "../dist/navigation-enforcement.js";
+import {
+  createCurrentWebsiteScope,
+  createExactPageScope,
+} from "../dist/navigation-policy.js";
 import { loadTabActivationEnforcement } from "../dist/tab-activation-store.js";
 
 test("cross-host commits restore the selected tab and publish bounded feedback", async () => {
@@ -29,8 +32,7 @@ test("cross-host commits restore the selected tab and publish bounded feedback",
   ]);
   assert.deepEqual(harness.blockedNotices, [["profile_one", 41]]);
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).navigationScope
-      .lastAllowedUrl,
+    (await storedTarget(harness.store, 41)).navigationScope.lastAllowedUrl,
     "https://work.example/project",
   );
 });
@@ -63,8 +65,7 @@ test("tab URL observations do not promote an incomplete same-site page", async (
 
   assert.deepEqual(harness.navigations, []);
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).navigationScope
-      .lastAllowedUrl,
+    (await storedTarget(harness.store, 41)).navigationScope.lastAllowedUrl,
     "https://work.example/project",
   );
 });
@@ -90,7 +91,7 @@ test("a matching completed document becomes the Last Allowed Page", async () => 
 
   const stored = await loadTabActivationEnforcement(harness.store);
   assert.equal(
-    stored.navigationScope.lastAllowedUrl,
+    stored.availableTargets[0].navigationScope.lastAllowedUrl,
     "http://work.example:8080/next?step=2",
   );
   assert.deepEqual(harness.navigations, []);
@@ -118,10 +119,10 @@ test("history changes before completion remain pending", async () => {
 
   const pending = await loadTabActivationEnforcement(harness.store);
   assert.equal(
-    pending.navigationScope.lastAllowedUrl,
+    pending.availableTargets[0].navigationScope.lastAllowedUrl,
     "https://work.example/project",
   );
-  assert.deepEqual(pending.navigationScope.pendingNavigation, {
+  assert.deepEqual(pending.availableTargets[0].navigationScope.pendingNavigation, {
     documentId: "loading-document",
     url: "https://work.example/loading?state=changed",
   });
@@ -134,8 +135,7 @@ test("history changes before completion remain pending", async () => {
     url: "https://work.example/loading?state=changed",
   });
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).navigationScope
-      .lastAllowedUrl,
+    (await storedTarget(harness.store, 41)).navigationScope.lastAllowedUrl,
     "https://work.example/loading?state=changed",
   );
 });
@@ -154,8 +154,7 @@ test("subframe navigation never changes or restores the top-level tab", async ()
 
   assert.deepEqual(harness.navigations, []);
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).navigationScope
-      .lastAllowedUrl,
+    (await storedTarget(harness.store, 41)).navigationScope.lastAllowedUrl,
     "https://work.example/project",
   );
 });
@@ -184,7 +183,7 @@ test("opened links transfer or close without expanding the immutable tab", async
   ]);
   assert.deepEqual(harness.closedTabs, [90, 91]);
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).tabId,
+    (await loadTabActivationEnforcement(harness.store)).availableTargets[0].tabId,
     41,
   );
 });
@@ -278,6 +277,254 @@ test("a completed blank child closes after resolving cross-scope", async () => {
   assert.deepEqual(harness.blockedNotices, [["profile_one", 41]]);
 });
 
+test("mixed scopes remain independent across tabs and Chrome windows", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1#overview",
+    ),
+  });
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "committed",
+    tabId: 42,
+    frameId: 0,
+    documentId: "fragment-reload",
+    url: "https://docs.example/reference?v=1#details",
+  });
+  await harness.enforcer.handle({
+    type: "completed",
+    tabId: 42,
+    frameId: 0,
+    documentId: "fragment-reload",
+    url: "https://docs.example/reference?v=1#details",
+  });
+  await harness.enforcer.handle({
+    type: "committed",
+    tabId: 42,
+    frameId: 0,
+    documentId: "changed-query",
+    url: "https://docs.example/reference?v=2",
+  });
+
+  assert.deepEqual(harness.navigations, [
+    [42, "https://docs.example/reference?v=1#details"],
+  ]);
+  assert.equal(
+    (await storedTarget(harness.store, 42)).navigationScope.lastAllowedUrl,
+    "https://docs.example/reference?v=1#details",
+  );
+  assert.equal(
+    (await storedTarget(harness.store, 41)).navigationScope.lastAllowedUrl,
+    "https://work.example/project",
+  );
+});
+
+test("activation, attachment, and closure update only runtime availability", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1",
+    ),
+  });
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({ type: "activated", tabId: 42 });
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 42,
+    windowId: 12,
+  });
+  assert.equal(
+    (await storedTarget(harness.store, 42)).windowId,
+    12,
+  );
+  await harness.enforcer.handle({ type: "removed", tabId: 42 });
+  await harness.enforcer.handle({ type: "activated", tabId: 99 });
+
+  const stored = await loadTabActivationEnforcement(harness.store);
+  assert.deepEqual(stored.availableTargets.map((target) => target.tabId), [41]);
+  assert.equal(stored.lastActivatedAvailableTabId, 41);
+  assert.deepEqual(harness.activations, [41]);
+  assert.deepEqual(harness.closedTargetNotices, [["profile_one", 42]]);
+  assert.deepEqual(
+    harness.activationNotices,
+    [["profile_one", 99, 41]],
+  );
+});
+
+test("a duplicated or attached unapproved identity never joins the allowlist", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 90,
+    sourceTabId: undefined,
+    pendingUrl: "https://work.example/project",
+    url: "https://work.example/project",
+  });
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 90,
+    windowId: 9,
+  });
+  await harness.enforcer.handle({ type: "activated", tabId: 90 });
+
+  assert.deepEqual(
+    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+      (target) => target.tabId,
+    ),
+    [41],
+  );
+  assert.deepEqual(harness.activations, [41]);
+  assert.deepEqual(harness.navigations, []);
+});
+
+test("a replaced selected identity is removed before its replacement activates", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1",
+    ),
+  });
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "replaced",
+    addedTabId: 142,
+    removedTabId: 42,
+  });
+
+  assert.deepEqual(
+    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+      (target) => target.tabId,
+    ),
+    [41],
+  );
+  assert.deepEqual(harness.activations, [41]);
+  assert.deepEqual(harness.closedTargetNotices, [["profile_one", 42]]);
+});
+
+test("concurrent navigation and activation effects stay serialized", async () => {
+  let releaseNavigation;
+  const navigationCanFinish = new Promise((resolve) => {
+    releaseNavigation = resolve;
+  });
+  const harness = makeHarness({ navigationCanFinish });
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1",
+    ),
+  });
+  await harness.enforcer.start(enforcement);
+
+  const blockedNavigation = harness.enforcer.handle({
+    type: "committed",
+    tabId: 41,
+    frameId: 0,
+    documentId: "blocked",
+    url: "https://video.example/watch",
+  });
+  const blockedActivation = harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+  });
+  releaseNavigation();
+  await Promise.all([blockedNavigation, blockedActivation]);
+
+  assert.deepEqual(harness.navigations, [
+    [41, "https://work.example/project"],
+  ]);
+  assert.deepEqual(harness.activations, [41]);
+});
+
+test("a target that disappears before a restore falls back without failing open", async () => {
+  const harness = makeHarness({ unavailableActivationTabIds: [42] });
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1",
+    ),
+  });
+  enforcement.lastActivatedAvailableTabId = 42;
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({ type: "activated", tabId: 99 });
+
+  assert.deepEqual(harness.activations, [42, 41]);
+  assert.deepEqual(
+    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+      (target) => target.tabId,
+    ),
+    [41],
+  );
+  assert.deepEqual(harness.closedTargetNotices, [["profile_one", 42]]);
+  assert.deepEqual(harness.activationNotices, [["profile_one", 99, 41]]);
+});
+
+test("a target that closes during navigation restore is removed cleanly", async () => {
+  const harness = makeHarness({ unavailableNavigationTabIds: [42] });
+  const enforcement = makeEnforcement();
+  enforcement.availableTargets.push({
+    tabId: 42,
+    windowId: 10,
+    navigationScope: createExactPageScope(
+      "https://docs.example/reference?v=1",
+    ),
+  });
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "committed",
+    tabId: 42,
+    frameId: 0,
+    documentId: "closed-during-restore",
+    url: "https://video.example/watch",
+  });
+
+  assert.deepEqual(harness.navigations, [
+    [42, "https://docs.example/reference?v=1"],
+  ]);
+  assert.deepEqual(
+    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+      (target) => target.tabId,
+    ),
+    [41],
+  );
+  assert.deepEqual(harness.closedTargetNotices, [["profile_one", 42]]);
+  assert.deepEqual(harness.blockedNotices, []);
+});
+
+test("atomic start confirmation precedes a closure event raised by start effects", async () => {
+  const lifecycleEvents = [];
+  const harness = makeHarness({ lifecycleEvents });
+  let removal;
+
+  await harness.enforcer.start(makeEnforcement(), async () => {
+    removal = harness.enforcer.handle({ type: "removed", tabId: 41 });
+    lifecycleEvents.push("confirmed");
+  });
+  await removal;
+
+  assert.deepEqual(lifecycleEvents, ["confirmed", "closed:41"]);
+});
+
 test("stop remains final when a blocked navigation effect is in flight", async () => {
   let releaseNavigation;
   const navigationCanFinish = new Promise((resolve) => {
@@ -303,12 +550,22 @@ test("stop remains final when a blocked navigation effect is in flight", async (
 function makeEnforcement() {
   return {
     profileId: "profile_one",
-    tabId: 41,
-    windowId: 9,
-    navigationScope: createCurrentWebsiteScope(
-      "https://work.example/project",
-    ),
+    availableTargets: [
+      {
+        tabId: 41,
+        windowId: 9,
+        navigationScope: createCurrentWebsiteScope(
+          "https://work.example/project",
+        ),
+      },
+    ],
+    lastActivatedAvailableTabId: 41,
   };
+}
+
+async function storedTarget(store, tabId) {
+  const enforcement = await loadTabActivationEnforcement(store);
+  return enforcement.availableTargets.find((target) => target.tabId === tabId);
 }
 
 function makeHarness(options = {}) {
@@ -327,8 +584,11 @@ function makeHarness(options = {}) {
   const navigations = [];
   const closedTabs = [];
   const blockedNotices = [];
+  const activations = [];
+  const activationNotices = [];
+  const closedTargetNotices = [];
   let currentTime = 10_000;
-  const enforcer = new CurrentWebsiteNavigationEnforcer({
+  const enforcer = new ChromeTabEnforcementCoordinator({
     store,
     platform: {
       async navigateTab(tabId, url) {
@@ -336,12 +596,24 @@ function makeHarness(options = {}) {
           await options.navigationCanFinish;
         }
         navigations.push([tabId, url]);
+        return !(options.unavailableNavigationTabIds ?? []).includes(tabId);
       },
       async closeTab(tabId) {
         closedTabs.push(tabId);
       },
+      async activateTab(tabId) {
+        activations.push(tabId);
+        return !(options.unavailableActivationTabIds ?? []).includes(tabId);
+      },
       blockedNavigation(profileId, tabId) {
         blockedNotices.push([profileId, tabId]);
+      },
+      blockedTabActivation(profileId, attemptedTabId, availableTabId) {
+        activationNotices.push([profileId, attemptedTabId, availableTabId]);
+      },
+      tabTargetClosed(profileId, tabId) {
+        closedTargetNotices.push([profileId, tabId]);
+        options.lifecycleEvents?.push(`closed:${tabId}`);
       },
     },
     now: () => {
@@ -357,5 +629,8 @@ function makeHarness(options = {}) {
     navigations,
     closedTabs,
     blockedNotices,
+    activations,
+    activationNotices,
+    closedTargetNotices,
   };
 }

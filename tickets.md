@@ -174,21 +174,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 10 — Support exact-page scopes and multiple Chrome tabs
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Let a focused browser workflow include several explicitly chosen tabs, each with its own strict website or page rule.
 
 **Blocked by:** 09 — Constrain an allowed Chrome tab to its website.
 
-- [ ] A user can select multiple individual Chrome tabs before starting.
-- [ ] Each selected tab independently chooses Current Website or Exact Page.
-- [ ] Exact Page matches the original hostname, path, and query parameters while ignoring URL fragments.
-- [ ] An ordinary reload of an allowed tab remains permitted.
-- [ ] Duplicated, detached, newly created, or newly activated unapproved tabs remain blocked.
-- [ ] Closing one selected tab removes it without ending the session or broadening another tab's policy.
-- [ ] Browser policies remain immutable for the entire session.
-- [ ] Concurrent tab and navigation events resolve deterministically without leaving a disallowed tab active.
-- [ ] Tests cover multiple windows, mixed scopes, reloads, fragments, query changes, duplication, detachment, closure, and event races.
+- [x] A user can select multiple individual Chrome tabs before starting.
+- [x] Each selected tab independently chooses Current Website or Exact Page.
+- [x] Exact Page matches the original hostname, path, and query parameters while ignoring URL fragments.
+- [x] An ordinary reload of an allowed tab remains permitted.
+- [x] Duplicated, detached, newly created, or newly activated unapproved tabs remain blocked.
+- [x] Closing one selected tab removes it without ending the session or broadening another tab's policy.
+- [x] Browser policies remain immutable for the entire session.
+- [x] Concurrent tab and navigation events resolve deterministically without leaving a disallowed tab active.
+- [x] Tests cover multiple windows, mixed scopes, reloads, fragments, query changes, duplication, detachment, closure, and event races.
 
 ## 11 — Support broad Chrome application and window targets
 

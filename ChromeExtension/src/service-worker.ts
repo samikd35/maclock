@@ -7,7 +7,8 @@ import {
   makeEnforcementError,
   makeHello,
   makeTabActivated,
-  makeTabActivationStarted,
+  makeEnforcementStarted,
+  makeTabTargetClosed,
   makeTabsSnapshot,
   parseNativeMessage,
 } from "./protocol.js";
@@ -19,18 +20,17 @@ import {
 } from "./chrome-tab-effects.js";
 import {
   TabActivationEnforcement,
-  loadTabActivationEnforcement,
 } from "./tab-activation-store.js";
-import { decideTabActivation } from "./tab-policy.js";
 import {
-  canStartCurrentWebsiteEnforcement,
-  createStartingCurrentWebsiteScope,
-  isWithinCurrentWebsite,
+  canStartNavigationEnforcement,
+  createStartingNavigationScope,
+  isWithinNavigationScope,
 } from "./navigation-policy.js";
 import {
-  CurrentWebsiteNavigationEnforcer,
-  NavigationEnforcementEvent,
+  ChromeTabEnforcementCoordinator,
+  ChromeTabEnforcementEvent,
 } from "./navigation-enforcement.js";
+import { chooseInitialAvailableTabsByWindow } from "./tab-policy.js";
 import { collectTabSnapshots } from "./tab-snapshot.js";
 
 const PROFILE_STORAGE_KEY = "stayPaneProfileIdentifier";
@@ -41,33 +41,41 @@ let nativePort: chrome.runtime.Port | null = null;
 let connectedProfileIdentifier: string | null = null;
 let reconnectTimer: number | null = null;
 let snapshotTimer: number | null = null;
-let lastFeedbackAt: number | null = null;
 const openedTabGraceTimers = new Map<number, number>();
 
-const navigationEnforcer = new CurrentWebsiteNavigationEnforcer({
+const tabEnforcementCoordinator = new ChromeTabEnforcementCoordinator({
   platform: {
     async navigateTab(tabId, url) {
-      await chrome.tabs.update(tabId, { url });
+      return performExistingTabEffect(async () => {
+        await chrome.tabs.update(tabId, { url });
+      });
     },
     async closeTab(tabId) {
       await closeTabIfPresent(tabId, {
         removeTab: async (candidateTabId) => chrome.tabs.remove(candidateTabId),
-        tabExists: async (candidateTabId) => {
-          try {
+        tabExists: async (candidateTabId) =>
+          performExistingTabEffect(async () => {
             await chrome.tabs.get(candidateTabId);
-            return true;
-          } catch (error) {
-            if (isMissingChromeTabError(error)) {
-              return false;
-            }
-            throw error;
-          }
-        },
+          }),
       });
+    },
+    async activateTab(tabId) {
+      return activateTabAndWindow(tabId);
     },
     blockedNavigation(profileId, tabId) {
       showBlockedNavigationFeedback();
       nativePort?.postMessage(makeBlockedNavigation(profileId, tabId));
+    },
+    blockedTabActivation(profileId, attemptedTabId, availableTabId) {
+      showBlockedFeedback(availableTabId === null);
+      if (availableTabId !== null) {
+        nativePort?.postMessage(
+          makeBlockedTabActivation(profileId, attemptedTabId, availableTabId),
+        );
+      }
+    },
+    tabTargetClosed(profileId, tabId) {
+      nativePort?.postMessage(makeTabTargetClosed(profileId, tabId));
     },
   },
   feedbackIntervalMs: FEEDBACK_INTERVAL_MS,
@@ -86,7 +94,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   scheduleSnapshot();
   if (changeInfo.url !== undefined) {
-    void handleNavigationEvent({
+    void handleChromeTabEnforcementEvent({
       type: "urlChanged",
       tabId,
       url: changeInfo.url,
@@ -98,30 +106,49 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   cancelOpenedTabGracePeriod(tabId);
-  void handleRemovedTab(tabId);
+  void handleChromeTabEnforcementEvent({ type: "removed", tabId });
   scheduleSnapshot();
 });
 chrome.tabs.onActivated.addListener((activeInfo) => {
   void handleTabActivated(activeInfo.tabId, activeInfo.windowId);
 });
-chrome.tabs.onAttached.addListener(() => scheduleSnapshot());
+chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+  void handleChromeTabEnforcementEvent({
+    type: "attached",
+    tabId,
+    windowId: attachInfo.newWindowId,
+  });
+  scheduleSnapshot();
+});
 chrome.tabs.onDetached.addListener(() => scheduleSnapshot());
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  void handleChromeTabEnforcementEvent({
+    type: "replaced",
+    addedTabId,
+    removedTabId,
+  });
+  scheduleSnapshot();
+});
 chrome.windows.onFocusChanged.addListener((windowId) => {
   void handleChromeWindowFocused(windowId);
 });
 chrome.webNavigation.onCommitted.addListener((details) => {
-  void handleNavigationEvent(makeDocumentNavigationEvent("committed", details));
+  void handleChromeTabEnforcementEvent(
+    makeDocumentNavigationEvent("committed", details),
+  );
 });
 chrome.webNavigation.onCompleted.addListener((details) => {
-  void handleNavigationEvent(makeDocumentNavigationEvent("completed", details));
+  void handleChromeTabEnforcementEvent(
+    makeDocumentNavigationEvent("completed", details),
+  );
 });
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
-  void handleNavigationEvent(
+  void handleChromeTabEnforcementEvent(
     makeDocumentNavigationEvent("historyUpdated", details),
   );
 });
 chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
-  void handleNavigationEvent(
+  void handleChromeTabEnforcementEvent(
     makeDocumentNavigationEvent("historyUpdated", details),
   );
 });
@@ -230,56 +257,109 @@ async function handleNativeMessage(
 async function beginEnforcement(
   command: BeginEnforcement,
 ): Promise<void> {
-  let tab: chrome.tabs.Tab;
+  let resolvedTargets: Array<{
+    commandTarget: BeginEnforcement["targets"][number];
+    tab: chrome.tabs.Tab;
+  }>;
   try {
-    tab = await chrome.tabs.get(command.tabId);
+    resolvedTargets = await Promise.all(
+      command.targets.map(async (commandTarget) => ({
+        commandTarget,
+        tab: await chrome.tabs.get(commandTarget.tabId),
+      })),
+    );
   } catch {
     sendEnforcementError(command.profileId, "targetMissing");
     return;
   }
-  if (
-    tab.incognito ||
-    tab.windowId !== command.windowId ||
-    tab.id !== command.tabId
-  ) {
+  if (resolvedTargets.some(({ commandTarget, tab }) => {
+    return (
+      tab.incognito ||
+      tab.windowId !== commandTarget.windowId ||
+      tab.id !== commandTarget.tabId
+    );
+  })) {
     sendEnforcementError(command.profileId, "targetMissing");
     return;
   }
 
   try {
-    const startingScope = {
-      initialUrl: command.navigationScope.initialUrl,
-      liveUrl: tab.url,
-      liveDocumentIsComplete: tab.status === "complete",
-    };
-    if (!canStartCurrentWebsiteEnforcement(startingScope)) {
+    const startingTargets = resolvedTargets.map(({ commandTarget, tab }) => ({
+      commandTarget,
+      tab,
+      startingScope: {
+        type: commandTarget.navigationScope.type,
+        initialUrl: commandTarget.navigationScope.initialUrl,
+        liveUrl: tab.url,
+        liveDocumentIsComplete: tab.status === "complete",
+      },
+    }));
+    if (startingTargets.some(
+      ({ startingScope }) => !canStartNavigationEnforcement(startingScope),
+    )) {
       sendEnforcementError(command.profileId, "targetNotReady");
       return;
     }
-    const navigationScope = createStartingCurrentWebsiteScope(startingScope);
+    const preparedTargets = startingTargets.map((startingTarget) => ({
+      ...startingTarget,
+      availableTarget: {
+        tabId: startingTarget.commandTarget.tabId,
+        windowId: startingTarget.commandTarget.windowId,
+        navigationScope: createStartingNavigationScope(
+          startingTarget.startingScope,
+        ),
+      },
+    }));
     const enforcement: TabActivationEnforcement = {
       profileId: command.profileId,
-      tabId: command.tabId,
-      windowId: command.windowId,
-      navigationScope,
-    };
-    await navigationEnforcer.start(enforcement);
-    if (
-      tab.url === undefined ||
-      !isWithinCurrentWebsite(navigationScope, tab.url)
-    ) {
-      await chrome.tabs.update(command.tabId, {
-        url: navigationScope.lastAllowedUrl,
-      });
-    }
-    await activateAllowedTab(enforcement);
-    nativePort?.postMessage(
-      makeTabActivationStarted(
-        enforcement.profileId,
-        enforcement.tabId,
-        enforcement.windowId,
+      availableTargets: preparedTargets.map(
+        ({ availableTarget }) => availableTarget,
       ),
-    );
+      lastActivatedAvailableTabId:
+        preparedTargets.find(({ tab }) => tab.active)?.availableTarget.tabId ??
+        preparedTargets[0]!.availableTarget.tabId,
+    };
+    await tabEnforcementCoordinator.start(enforcement, async () => {
+      for (const { tab, availableTarget } of preparedTargets) {
+        const liveURL = tab.url;
+        if (
+          liveURL === undefined ||
+          !isWithinNavigationScope(
+            availableTarget.navigationScope,
+            liveURL,
+          )
+        ) {
+          await chrome.tabs.update(availableTarget.tabId, {
+            url: availableTarget.navigationScope.lastAllowedUrl,
+          });
+        }
+      }
+      const initialTabsByWindow = chooseInitialAvailableTabsByWindow(
+        preparedTargets.map(({ tab, availableTarget }) => ({
+          tabId: availableTarget.tabId,
+          windowId: availableTarget.windowId,
+          isActive: tab.active,
+        })),
+      );
+      for (const tabId of initialTabsByWindow) {
+        await chrome.tabs.update(tabId, { active: true });
+      }
+      const initialAvailableTabId = enforcement.lastActivatedAvailableTabId;
+      if (initialAvailableTabId === null) {
+        throw new Error("Atomic enforcement requires at least one target");
+      }
+      if (!(await activateTabAndWindow(initialAvailableTabId))) {
+        throw new Error(
+          "Initial Available Tab Target disappeared during activation",
+        );
+      }
+      nativePort?.postMessage(
+        makeEnforcementStarted(
+          enforcement.profileId,
+          enforcement.availableTargets.map((target) => target.tabId),
+        ),
+      );
+    });
   } catch {
     await stopTabActivationEnforcement();
     sendEnforcementError(command.profileId, "activationFailed");
@@ -289,7 +369,7 @@ async function beginEnforcement(
 function makeDocumentNavigationEvent(
   type: "committed" | "completed" | "historyUpdated",
   details: chrome.webNavigation.WebNavigationFramedCallbackDetails,
-): NavigationEnforcementEvent {
+): ChromeTabEnforcementEvent {
   return {
     type,
     tabId: details.tabId,
@@ -318,7 +398,7 @@ async function handleOpenedTab(
 
 async function handleOpenedTabObservation(
   observation: Omit<
-    Extract<NavigationEnforcementEvent, { type: "openedTab" }>,
+    Extract<ChromeTabEnforcementEvent, { type: "openedTab" }>,
     "type"
   >,
 ): Promise<void> {
@@ -332,7 +412,10 @@ async function handleOpenedTabObservation(
   } else {
     cancelOpenedTabGracePeriod(observation.tabId);
   }
-  await handleNavigationEvent({ type: "openedTab", ...observation });
+  await handleChromeTabEnforcementEvent({
+    type: "openedTab",
+    ...observation,
+  });
 }
 
 function scheduleOpenedTabGracePeriod(tabId: number): void {
@@ -341,7 +424,7 @@ function scheduleOpenedTabGracePeriod(tabId: number): void {
     tabId,
     setTimeout(() => {
       openedTabGraceTimers.delete(tabId);
-      void handleNavigationEvent({
+      void handleChromeTabEnforcementEvent({
         type: "openedTabGraceExpired",
         tabId,
       });
@@ -364,11 +447,11 @@ function clearOpenedTabGracePeriods(): void {
   openedTabGraceTimers.clear();
 }
 
-async function handleNavigationEvent(
-  event: NavigationEnforcementEvent,
+async function handleChromeTabEnforcementEvent(
+  event: ChromeTabEnforcementEvent,
 ): Promise<void> {
   try {
-    await navigationEnforcer.handle(event);
+    await tabEnforcementCoordinator.handle(event);
   } catch {
     await failOpenAfterNavigationFailure();
   }
@@ -380,8 +463,7 @@ async function failOpenAfterNavigationFailure(): Promise<void> {
   try {
     try {
       clearOpenedTabGracePeriods();
-      lastFeedbackAt = null;
-      await navigationEnforcer.stop();
+      await tabEnforcementCoordinator.stop();
       await chrome.action.setBadgeText({ text: "" });
       await chrome.action.setTitle({ title: "StayPane Chrome Companion" });
     } catch {
@@ -413,6 +495,10 @@ async function handleTabActivated(
   attemptedTabId: number,
   attemptedWindowId: number,
 ): Promise<void> {
+  await handleChromeTabEnforcementEvent({
+    type: "activated",
+    tabId: attemptedTabId,
+  });
   await ensureNativeConnection();
   const profileIdentifier = connectedProfileIdentifier;
   if (profileIdentifier !== null) {
@@ -420,46 +506,10 @@ async function handleTabActivated(
       makeTabActivated(profileIdentifier, attemptedTabId, attemptedWindowId),
     );
   }
-
-  const enforcement = await loadTabActivationEnforcement();
-  if (enforcement === null) {
-    return;
-  }
-  const decision = decideTabActivation({
-    allowedTabId: enforcement.tabId,
-    attemptedTabId,
-    now: Date.now(),
-    lastFeedbackAt,
-    feedbackIntervalMs: FEEDBACK_INTERVAL_MS,
-  });
-  lastFeedbackAt = decision.nextFeedbackAt;
-  if (decision.restoreTabId === null) {
-    return;
-  }
-
-  try {
-    await activateAllowedTab(enforcement);
-    if (decision.shouldNotify) {
-      showBlockedFeedback();
-      nativePort?.postMessage(
-        makeBlockedTabActivation(
-          enforcement.profileId,
-          attemptedTabId,
-          enforcement.tabId,
-        ),
-      );
-    }
-  } catch {
-    sendEnforcementError(enforcement.profileId, "activationFailed");
-  }
 }
 
 async function handleChromeWindowFocused(windowId: number): Promise<void> {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    return;
-  }
-  const enforcement = await loadTabActivationEnforcement();
-  if (enforcement === null || windowId === enforcement.windowId) {
     return;
   }
   const [activeTab] = await chrome.tabs.query({ active: true, windowId });
@@ -468,18 +518,25 @@ async function handleChromeWindowFocused(windowId: number): Promise<void> {
   }
 }
 
-async function activateAllowedTab(
-  enforcement: TabActivationEnforcement,
-): Promise<void> {
-  await chrome.tabs.update(enforcement.tabId, { active: true });
-  await chrome.windows.update(enforcement.windowId, { focused: true });
+async function activateTabAndWindow(tabId: number): Promise<boolean> {
+  return performExistingTabEffect(async () => {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  });
 }
 
-async function handleRemovedTab(tabId: number): Promise<void> {
-  const enforcement = await loadTabActivationEnforcement();
-  if (enforcement?.tabId === tabId) {
-    sendEnforcementError(enforcement.profileId, "targetMissing");
-    await stopTabActivationEnforcement();
+async function performExistingTabEffect(
+  effect: () => Promise<void>,
+): Promise<boolean> {
+  try {
+    await effect();
+    return true;
+  } catch (error) {
+    if (isMissingChromeTabError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -520,9 +577,8 @@ async function loadProfileIdentifier(): Promise<string> {
 }
 
 async function stopTabActivationEnforcement(): Promise<void> {
-  lastFeedbackAt = null;
   clearOpenedTabGracePeriods();
-  await navigationEnforcer.stop();
+  await tabEnforcementCoordinator.stop();
   await chrome.action.setBadgeText({ text: "" });
   await chrome.action.setTitle({ title: "StayPane Chrome Companion" });
 }
@@ -538,11 +594,17 @@ function sendEnforcementError(
   nativePort?.postMessage(makeEnforcementError(profileIdentifier, code));
 }
 
-function showBlockedFeedback(): void {
+function showBlockedFeedback(noTargetsRemain = false): void {
   void chrome.action.setBadgeBackgroundColor({ color: "#C2410C" });
   void chrome.action.setBadgeText({ text: "↩" });
+  if (noTargetsRemain) {
+    void chrome.action.setTitle({
+      title: "StayPane rejected the Blocked Tab Activation because no Available Tab Targets remain.",
+    });
+  }
   setTimeout(() => {
     void chrome.action.setBadgeText({ text: "" });
+    void chrome.action.setTitle({ title: "StayPane Chrome Companion" });
   }, 1_200);
 }
 
@@ -550,7 +612,7 @@ function showBlockedNavigationFeedback(): void {
   void chrome.action.setBadgeBackgroundColor({ color: "#C2410C" });
   void chrome.action.setBadgeText({ text: "SITE" });
   void chrome.action.setTitle({
-    title: "StayPane returned the selected tab to its Current Website.",
+    title: "StayPane returned the Tab Target to its Navigation Scope.",
   });
   setTimeout(() => {
     void chrome.action.setBadgeText({ text: "" });

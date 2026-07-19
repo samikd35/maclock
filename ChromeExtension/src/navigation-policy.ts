@@ -10,6 +10,17 @@ export type CurrentWebsiteScope = {
   pendingNavigation?: PendingAllowedNavigation;
 };
 
+export type ExactPageScope = {
+  type: "exactPage";
+  hostname: string;
+  pathname: string;
+  search: string;
+  lastAllowedUrl: string;
+  pendingNavigation?: PendingAllowedNavigation;
+};
+
+export type NavigationScope = CurrentWebsiteScope | ExactPageScope;
+
 type FeedbackInput = {
   now: number;
   lastFeedbackAt: number | null;
@@ -17,7 +28,7 @@ type FeedbackInput = {
 };
 
 export type CommittedNavigationInput = FeedbackInput & {
-  scope: CurrentWebsiteScope;
+  scope: NavigationScope;
   candidateUrl: string;
   documentId: string;
 };
@@ -25,20 +36,20 @@ export type CommittedNavigationInput = FeedbackInput & {
 export type CommittedNavigationDecision =
   | {
       kind: "allow";
-      nextScope: CurrentWebsiteScope;
+      nextScope: NavigationScope;
       shouldNotify: false;
       nextFeedbackAt: number | null;
     }
   | {
       kind: "restore";
       restoreUrl: string;
-      nextScope: CurrentWebsiteScope;
+      nextScope: NavigationScope;
       shouldNotify: boolean;
       nextFeedbackAt: number | null;
     };
 
 export type OpenedTabInput = FeedbackInput & {
-  scope: CurrentWebsiteScope;
+  scope: NavigationScope;
   candidateUrl: string | undefined;
   hasGraceExpired: boolean;
 };
@@ -52,10 +63,16 @@ export type OpenedTabDecision =
       nextFeedbackAt: number | null;
     };
 
-export type StartingCurrentWebsiteInput = {
+export type StartingNavigationDetails = {
   initialUrl: string;
   liveUrl: string | undefined;
   liveDocumentIsComplete: boolean;
+};
+
+export type StartingCurrentWebsiteInput = StartingNavigationDetails;
+
+export type StartingNavigationInput = StartingNavigationDetails & {
+  type: NavigationScope["type"];
 };
 
 export function createCurrentWebsiteScope(
@@ -69,14 +86,38 @@ export function createCurrentWebsiteScope(
   };
 }
 
+export function createExactPageScope(initialUrl: string): ExactPageScope {
+  const parsed = requireWebURL(initialUrl);
+  return {
+    type: "exactPage",
+    hostname: normalizeHostname(parsed.hostname),
+    pathname: parsed.pathname,
+    search: parsed.search,
+    lastAllowedUrl: parsed.href,
+  };
+}
+
 export function createStartingCurrentWebsiteScope(
   input: StartingCurrentWebsiteInput,
 ): CurrentWebsiteScope {
-  const scope = createCurrentWebsiteScope(input.initialUrl);
+  const scope = createStartingNavigationScope({
+    ...input,
+    type: "currentWebsite",
+  });
+  if (scope.type !== "currentWebsite") {
+    throw new Error("Current Website scope construction failed");
+  }
+  return scope;
+}
+
+export function createStartingNavigationScope(
+  input: StartingNavigationInput,
+): NavigationScope {
+  const scope = createNavigationScope(input.type, input.initialUrl);
   if (
     !input.liveDocumentIsComplete ||
     input.liveUrl === undefined ||
-    !isWithinCurrentWebsite(scope, input.liveUrl)
+    !isWithinNavigationScope(scope, input.liveUrl)
   ) {
     return scope;
   }
@@ -89,13 +130,20 @@ export function createStartingCurrentWebsiteScope(
 export function canStartCurrentWebsiteEnforcement(
   input: StartingCurrentWebsiteInput,
 ): boolean {
+  return canStartNavigationEnforcement({
+    ...input,
+    type: "currentWebsite",
+  });
+}
+
+export function canStartNavigationEnforcement(
+  input: StartingNavigationInput,
+): boolean {
   if (input.liveDocumentIsComplete || input.liveUrl === undefined) {
     return true;
   }
-  return !isWithinCurrentWebsite(
-    createCurrentWebsiteScope(input.initialUrl),
-    input.liveUrl,
-  );
+  const scope = createNavigationScope(input.type, input.initialUrl);
+  return !isWithinNavigationScope(scope, input.liveUrl);
 }
 
 export function isWithinCurrentWebsite(
@@ -107,6 +155,25 @@ export function isWithinCurrentWebsite(
     parsed !== null &&
     normalizeHostname(parsed.hostname) === scope.hostname
   );
+}
+
+export function isWithinNavigationScope(
+  scope: NavigationScope,
+  candidateUrl: string,
+): boolean {
+  const parsed = parseWebURL(candidateUrl);
+  if (
+    parsed === null ||
+    normalizeHostname(parsed.hostname) !== scope.hostname
+  ) {
+    return false;
+  }
+  switch (scope.type) {
+    case "currentWebsite":
+      return true;
+    case "exactPage":
+      return parsed.pathname === scope.pathname && parsed.search === scope.search;
+  }
 }
 
 export function isValidCurrentWebsiteScope(
@@ -138,32 +205,47 @@ export function isValidCurrentWebsiteScope(
   ) {
     return false;
   }
-  if (candidate.pendingNavigation === undefined) {
+  return isValidPendingNavigation(candidate as CurrentWebsiteScope);
+}
+
+export function isValidNavigationScope(
+  value: unknown,
+): value is NavigationScope {
+  if (isValidCurrentWebsiteScope(value)) {
     return true;
   }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "type",
+    "hostname",
+    "pathname",
+    "search",
+    "lastAllowedUrl",
+    "pendingNavigation",
+  ]);
   if (
-    typeof candidate.pendingNavigation !== "object" ||
-    candidate.pendingNavigation === null ||
-    Array.isArray(candidate.pendingNavigation)
+    Object.keys(candidate).some((key) => !allowedKeys.has(key)) ||
+    candidate.type !== "exactPage" ||
+    typeof candidate.hostname !== "string" ||
+    typeof candidate.pathname !== "string" ||
+    !candidate.pathname.startsWith("/") ||
+    typeof candidate.search !== "string" ||
+    (candidate.search !== "" && !candidate.search.startsWith("?")) ||
+    typeof candidate.lastAllowedUrl !== "string"
   ) {
     return false;
   }
-  const pending = candidate.pendingNavigation as Record<string, unknown>;
+  const scope = candidate as ExactPageScope;
   if (
-    Object.keys(pending).sort().join(",") !== "documentId,url" ||
-    typeof pending.documentId !== "string" ||
-    pending.documentId.length === 0 ||
-    new TextEncoder().encode(pending.documentId).length > 128 ||
-    typeof pending.url !== "string"
+    parseWebURL(scope.lastAllowedUrl)?.href !== scope.lastAllowedUrl ||
+    !isWithinNavigationScope(scope, scope.lastAllowedUrl)
   ) {
     return false;
   }
-  const pendingURL = parseWebURL(pending.url);
-  return (
-    pendingURL !== null &&
-    pendingURL.href === pending.url &&
-    normalizeHostname(pendingURL.hostname) === candidate.hostname
-  );
+  return isValidPendingNavigation(scope);
 }
 
 export function decideCommittedNavigation(
@@ -172,7 +254,7 @@ export function decideCommittedNavigation(
   const candidate = parseWebURL(input.candidateUrl);
   if (
     candidate !== null &&
-    normalizeHostname(candidate.hostname) === input.scope.hostname
+    isWithinNavigationScope(input.scope, candidate.href)
   ) {
     return {
       kind: "allow",
@@ -198,11 +280,11 @@ export function decideCommittedNavigation(
   };
 }
 
-export function completeCurrentWebsiteNavigation(
-  scope: CurrentWebsiteScope,
+export function completeNavigationScope(
+  scope: NavigationScope,
   documentId: string,
   completedUrl: string,
-): CurrentWebsiteScope {
+): NavigationScope {
   const pending = scope.pendingNavigation;
   const completed = parseWebURL(completedUrl);
   if (
@@ -210,7 +292,7 @@ export function completeCurrentWebsiteNavigation(
     pending.documentId !== documentId ||
     completed === null ||
     completed.href !== pending.url ||
-    normalizeHostname(completed.hostname) !== scope.hostname
+    !isWithinNavigationScope(scope, completed.href)
   ) {
     return scope;
   }
@@ -230,7 +312,7 @@ export function decideOpenedTab(input: OpenedTabInput): OpenedTabDecision {
   }
   if (
     candidate !== undefined &&
-    isWithinCurrentWebsite(input.scope, candidate)
+    isWithinNavigationScope(input.scope, candidate)
   ) {
     return {
       kind: "transfer",
@@ -265,21 +347,53 @@ function decideFeedback(input: FeedbackInput): {
 }
 
 function withoutPendingNavigation(
-  scope: CurrentWebsiteScope,
-): CurrentWebsiteScope {
+  scope: NavigationScope,
+): NavigationScope {
   if (scope.pendingNavigation === undefined) {
     return scope;
   }
   const { pendingNavigation: _, ...stableScope } = scope;
-  return stableScope;
+  return stableScope as NavigationScope;
+}
+
+function isValidPendingNavigation(scope: NavigationScope): boolean {
+  if (scope.pendingNavigation === undefined) {
+    return true;
+  }
+  if (
+    typeof scope.pendingNavigation !== "object" ||
+    scope.pendingNavigation === null ||
+    Array.isArray(scope.pendingNavigation)
+  ) {
+    return false;
+  }
+  const pending = scope.pendingNavigation as Record<string, unknown>;
+  return (
+    Object.keys(pending).sort().join(",") === "documentId,url" &&
+    typeof pending.documentId === "string" &&
+    pending.documentId.length > 0 &&
+    new TextEncoder().encode(pending.documentId).length <= 128 &&
+    typeof pending.url === "string" &&
+    parseWebURL(pending.url)?.href === pending.url &&
+    isWithinNavigationScope(scope, pending.url)
+  );
 }
 
 function requireWebURL(value: string): URL {
   const parsed = parseWebURL(value);
   if (parsed === null) {
-    throw new Error("Current Website requires an HTTP or HTTPS URL");
+    throw new Error("A navigation scope requires an HTTP or HTTPS URL");
   }
   return parsed;
+}
+
+function createNavigationScope(
+  type: NavigationScope["type"],
+  initialUrl: string,
+): NavigationScope {
+  return type === "currentWebsite"
+    ? createCurrentWebsiteScope(initialUrl)
+    : createExactPageScope(initialUrl);
 }
 
 function parseWebURL(value: string): URL | null {
