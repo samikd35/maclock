@@ -1,4 +1,4 @@
-.PHONY: app extension run setup-chrome test test-extension
+.PHONY: app audit-release extension run setup-chrome test test-extension test-release verify
 
 app: extension
 	swift build -c release --product StayPane
@@ -30,4 +30,14 @@ test:
 	swift test
 
 test-extension:
+	npm --prefix "$(CURDIR)/ChromeExtension" ci
 	npm --prefix "$(CURDIR)/ChromeExtension" test
+
+test-release:
+	bash "$(CURDIR)/Tests/ReleaseTests/release-contract.test.sh"
+
+audit-release:
+	bash "$(CURDIR)/scripts/audit-source-release.sh"
+
+verify:
+	bash "$(CURDIR)/scripts/verify-source-release.sh"

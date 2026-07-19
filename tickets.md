@@ -249,21 +249,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 14 — Verify the source-only v1 release from a fresh clone
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 **What to build:** Package the repository as a trustworthy open-source v1 that another technical Mac user can clone, understand, build, install, verify, and update without paid developer accounts.
 
 **Blocked by:** 13 — Complete first-run onboarding and accessible interaction.
 
-- [ ] The repository carries the MIT license and clearly explains that commercial and closed-source reuse is permitted with the license notice preserved.
-- [ ] Multi-context domain documentation maps product, Mac application, Chrome extension, and native bridge vocabulary and architectural decisions.
-- [ ] Build instructions start from a fresh clone on a supported Mac and identify all required tools.
-- [ ] One documented setup command builds or installs the local native bridge registration without requiring an Apple or Google paid developer account.
-- [ ] Chrome Developer Mode installation, reload, bridge verification, removal, and update steps are documented.
-- [ ] The documentation explains unsigned source distribution, Accessibility permission, the honest bypass boundary, local-only privacy, and unsupported environments.
-- [ ] Automated checks build and test the Mac app, Session Engine, extension, and bridge with redacted test output.
-- [ ] The complete test suite passes from a clean checkout.
+- [x] The repository carries the MIT license and clearly explains that commercial and closed-source reuse is permitted with the license notice preserved.
+- [x] Multi-context domain documentation maps product, Mac application, Chrome extension, and native bridge vocabulary and architectural decisions.
+- [x] Build instructions start from a fresh clone on a supported Mac and identify all required tools.
+- [x] One documented setup command builds or installs the local native bridge registration without requiring an Apple or Google paid developer account.
+- [x] Chrome Developer Mode installation, reload, bridge verification, removal, and update steps are documented.
+- [x] The documentation explains unsigned source distribution, Accessibility permission, the honest bypass boundary, local-only privacy, and unsupported environments.
+- [x] Automated checks build and test the Mac app, Session Engine, extension, and bridge with redacted test output.
+- [x] The complete test suite passes from a clean checkout.
 - [ ] A manual acceptance matrix passes normal completion, early reset, closed targets, transient dialogs, multi-display, Spaces, full screen, sleep, crash, restart, permission loss, bridge loss, multiple Chrome tabs, scopes, profiles, Incognito, and restoration failures.
 - [ ] A short real session completes successfully after following only the public installation documentation.
-- [ ] The roadmap documents Safari first, other Chromium browsers next, and Firefox afterward without promising them in v1.
-- [ ] No release artifact includes automatic telemetry, background update checks, signed-binary claims, or private macOS APIs.
+- [x] The roadmap documents Safari first, other Chromium browsers next, and Firefox afterward without promising them in v1.
+- [x] No release artifact includes automatic telemetry, background update checks, signed-binary claims, or private macOS APIs.

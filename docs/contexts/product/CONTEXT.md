@@ -71,3 +71,11 @@ _Avoid_: Analytics, telemetry, activity log
 **Diagnostic Export**:
 A local troubleshooting artifact created only by an explicit user action and opened for inspection before the user decides whether to share it.
 _Avoid_: Crash upload, diagnostic submission, support report
+
+**Source-Only Release**:
+A reviewed Git commit whose MIT-licensed source, public installation guide, local build commands, automated verification, and manual acceptance matrix are the distribution product. It does not claim a Developer ID-signed or notarized public binary, store distribution, or automatic updates.
+_Avoid_: Binary release, installer package, signed download
+
+**Release Verification**:
+The public `make verify` gate that runs the release contract, complete automated suites, release app and Native Bridge builds, and the packaged-source audit with summarized redacted output. Platform behavior that requires real macOS or Chrome interaction remains in the manual release matrix.
+_Avoid_: Unit tests, notarization, release upload

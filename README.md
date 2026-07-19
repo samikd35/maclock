@@ -2,17 +2,24 @@
 
 StayPane is a source-only macOS menu-bar focus timer. You choose one or more applications, exact windows, broad Chrome windows, or individual Chrome tabs and a duration; during the session, StayPane minimizes other windows and returns focus to the allowed target without quitting anything.
 
+StayPane is available under the [MIT License](LICENSE). Commercial and closed-source reuse is permitted, provided the copyright and license notice is preserved in copies or substantial portions of the software.
+
 StayPane targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Window discovery and hover outlines use Accessibility geometry only: Screen Recording permission is not required.
 
-## Build and run
+## Build, verify, and run
 
-Install Apple's Command Line Tools and Node.js, then run:
+On an Apple silicon Mac running macOS 26 or newer, install the Xcode 26 Command Line Tools (or full Xcode 26) and Node.js 20 or newer. From a fresh clone, run:
 
 ```sh
+git clone <repository-url> StayPane
+cd StayPane
+make verify
 make run
 ```
 
-This compiles a release executable, creates an ad-hoc-signed app at `.build/StayPane.app`, and opens it. No paid Apple Developer account is needed for a local source build.
+`make verify` runs the release contract, complete Swift and Chrome-extension suites, release app and Native Bridge builds, and the packaged-source audit with summarized, redacted output. `make run` creates an ad-hoc-signed local app at `.build/StayPane.app` and opens it. No paid Apple Developer account is needed for a local source build.
+
+The complete fresh-clone, Accessibility, unsigned-source, Chrome Developer Mode, connection verification, removal, and manual update instructions are in [Install StayPane from source](docs/INSTALL.md).
 
 On first use, StayPane opens a local onboarding checklist. It explains the honest self-control boundary and local-only privacy model, distinguishes Not Requested, Access Not Granted, Enabled but Unverified, Verified, and Revoked Accessibility Setup States, and offers a Harmless Window-Control Verification that writes a window's existing minimized value back unchanged. Choose **Open Accessibility Settings**, enable StayPane under **Privacy & Security → Accessibility**, return to the app, and run the verification. It changes no window layout or content, and StayPane never requests Screen Recording.
 
@@ -23,7 +30,10 @@ Run the tests with:
 ```sh
 make test
 make test-extension
+make test-release
 ```
+
+The [v1 release acceptance matrix](docs/manual-testing/v1-release-matrix.md) consolidates the real macOS, Chrome, lifecycle, privacy, and Short Real Session checks that cannot be proven by hermetic automation. Future browser exploration follows [Safari first, other Chromium browsers next, and Firefox afterward](ROADMAP.md); that ordering is not a promise of support or schedule.
 
 ## Current scope
 
@@ -33,8 +43,8 @@ Sessions support multiple broad Application Targets, exact macOS Window Targets,
 
 Chrome integration is entirely local and does not require a Google developer account or Chrome Web Store listing.
 
-1. Build the packaged app and extension with `make app`, then open `.build/StayPane.app`.
-2. In StayPane, choose **Register Native Host**. This Native Host Registration writes a user-level manifest that accepts only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
+1. Run `make setup-chrome`. This builds the packaged app, extension, and Native Bridge and writes a user-level Native Host Registration that accepts only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke`.
+2. Open `.build/StayPane.app`.
 3. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `.build/StayPane.app/Contents/Resources/ChromeExtension` (the **Show Extension Folder** button reveals it).
 4. Open the extension's details and enable **Allow in Incognito**. StayPane never offers Incognito tabs as Targets, but it needs this capability to minimize Incognito windows that would otherwise bypass a precise browser Session.
 5. Return to StayPane and wait for the Chrome Profile to show **Ready**. Repeat the unpacked-extension setup for every Chrome Profile whose browser Targets you want to combine, then expand Google Chrome to choose a broad Chrome window or an eligible HTTP or HTTPS tab beneath it.
