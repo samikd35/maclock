@@ -1,4 +1,4 @@
-# Ticket 08 manual acceptance: one Chrome Tab Target
+# Ticket 08 manual acceptance: one Tab Target
 
 These checks exercise Chrome APIs and native messaging that cannot be proven by the hermetic test suite. They require ordinary (non-Incognito) Chrome windows. StayPane and the companion contact no remote StayPane service.
 
@@ -16,7 +16,7 @@ No Apple or Google paid developer account is part of this source-build flow. Reb
 
 1. Open several ordinary tabs across at least two Chrome windows. Include one site with a favicon.
 2. Refresh StayPane and expand Google Chrome.
-3. Confirm a **Chrome tabs** section appears beneath the macOS window rows. Tabs must be grouped by Chrome window and show title, hostname, and a favicon when Chrome provides one.
+3. Confirm a **Chrome windows and tabs** section appears beneath the macOS window rows. Tabs must be grouped by Chrome window and show title, hostname, and a favicon when Chrome provides one.
 4. Confirm Incognito tabs do not appear.
 5. Choose one tab, then choose a different tab. The current build keeps both explicit Tab Targets selected; an active Session must show each exact immutable Tab Target. Selecting the broad Chrome application still replaces its redundant child choices.
 6. Read the visible precision note. The current build now applies Ticket 09's Current Website Navigation Scope; use the Ticket 09 manual checks for navigation behavior.

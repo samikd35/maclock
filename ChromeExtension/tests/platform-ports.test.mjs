@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NativeCommandQueue } from "../dist/native-command-queue.js";
 import {
-  clearTabActivationEnforcement,
-  loadTabActivationEnforcement,
-  saveTabActivationEnforcement,
-} from "../dist/tab-activation-store.js";
+  clearStoredChromeTargetState,
+  loadStoredChromeTargetState,
+  saveStoredChromeTargetState,
+} from "../dist/chrome-target-enforcement-store.js";
 import { collectTabSnapshots } from "../dist/tab-snapshot.js";
 
 test("serializes an end command behind an in-flight begin command", async () => {
@@ -57,7 +57,7 @@ test("runs local fail-open cleanup when a native command fails", async () => {
   assert.equal(cleanedUp, true);
 });
 
-test("tab activation storage is isolated behind its port", async () => {
+test("browser enforcement storage is isolated behind its port", async () => {
   const values = {};
   const store = {
     async get() {
@@ -71,7 +71,13 @@ test("tab activation storage is isolated behind its port", async () => {
     },
   };
   const enforcement = {
+    state: "active",
     profileId: "profile_one",
+    allowedWindowIds: [12],
+    initiallyMinimizedWindowIds: [14],
+    minimizedWindows: [
+      { windowId: 13, previousState: "normal" },
+    ],
     availableTargets: [
       {
         tabId: 41,
@@ -87,18 +93,18 @@ test("tab activation storage is isolated behind its port", async () => {
         },
       },
     ],
-    lastActivatedAvailableTabId: 41,
+    lastActivatedTarget: { type: "window", windowId: 12 },
   };
 
-  await saveTabActivationEnforcement(enforcement, store);
-  assert.deepEqual(await loadTabActivationEnforcement(store), enforcement);
-  await clearTabActivationEnforcement(store);
-  assert.equal(await loadTabActivationEnforcement(store), null);
+  await saveStoredChromeTargetState(enforcement, store);
+  assert.deepEqual(await loadStoredChromeTargetState(store), enforcement);
+  await clearStoredChromeTargetState(store);
+  assert.equal(await loadStoredChromeTargetState(store), null);
 });
 
 test("invalid persisted Current Website state is cleared", async () => {
   const values = {
-    stayPaneTabActivationEnforcement: {
+    stayPaneChromeTargetEnforcement: {
       profileId: "profile_one",
       tabId: 41,
       windowId: 9,
@@ -121,7 +127,7 @@ test("invalid persisted Current Website state is cleared", async () => {
     },
   };
 
-  assert.equal(await loadTabActivationEnforcement(store), null);
+  assert.equal(await loadStoredChromeTargetState(store), null);
   assert.deepEqual(values, {});
 });
 
@@ -139,7 +145,11 @@ test("multi-tab enforcement storage preserves independent mixed scopes", async (
     },
   };
   const enforcement = {
+    state: "active",
     profileId: "profile_one",
+    allowedWindowIds: [],
+    initiallyMinimizedWindowIds: [],
+    minimizedWindows: [],
     availableTargets: [
       {
         tabId: 41,
@@ -162,12 +172,12 @@ test("multi-tab enforcement storage preserves independent mixed scopes", async (
         },
       },
     ],
-    lastActivatedAvailableTabId: 41,
+    lastActivatedTarget: { type: "tab", tabId: 41 },
   };
 
-  await saveTabActivationEnforcement(enforcement, store);
+  await saveStoredChromeTargetState(enforcement, store);
 
-  assert.deepEqual(await loadTabActivationEnforcement(store), enforcement);
+  assert.deepEqual(await loadStoredChromeTargetState(store), enforcement);
 });
 
 test("tab snapshots use injected Chrome and favicon ports", async () => {
@@ -183,6 +193,15 @@ test("tab snapshots use injected Chrome and favicon ports", async () => {
         incognito: false,
       }];
     },
+    async queryWindows() {
+      return [{
+        id: 9,
+        left: 120,
+        top: 80,
+        width: 1_200,
+        height: 800,
+      }];
+    },
     async loadFavicon(pageURL) {
       assert.equal(pageURL, "https://work.example/project");
       return { ok: true, bytes: png };
@@ -191,5 +210,11 @@ test("tab snapshots use injected Chrome and favicon ports", async () => {
 
   assert.equal(snapshots.length, 1);
   assert.equal(snapshots[0].tabId, 41);
+  assert.deepEqual(snapshots[0].windowBounds, {
+    left: 120,
+    top: 80,
+    width: 1_200,
+    height: 800,
+  });
   assert.match(snapshots[0].faviconDataUrl, /^data:image\/png;base64,/);
 });

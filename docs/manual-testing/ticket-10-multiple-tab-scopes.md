@@ -6,7 +6,7 @@ These checks cover real Chrome window and tab lifecycle behavior that cannot be 
 
 1. Run `make app`, `make test`, and `make test-extension` from the repository root.
 2. Open `.build/StayPane.app`, register the Native Host, and confirm the Chrome companion is connected.
-3. Reload **StayPane Chrome Companion** in `chrome://extensions`. Confirm it reports version 0.3.0.
+3. Reload **StayPane Chrome Companion** in `chrome://extensions`. Confirm it reports version 0.4.0.
 4. Open at least two eligible HTTP or HTTPS tabs in different Chrome windows.
 
 ## Multiple selection and review

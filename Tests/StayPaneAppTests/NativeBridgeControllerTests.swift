@@ -77,9 +77,9 @@ import Testing
         displayName: "Google Chrome",
         bundleIdentifier: "com.google.Chrome"
     )
-    let target = try #require(controller.targets(for: chrome).first)
+    let target = try #require(controller.tabTargets(for: chrome).first)
     #expect(controller.isConnected)
-    #expect(controller.targets(for: chrome).count == 1)
+    #expect(controller.tabTargets(for: chrome).count == 1)
     #expect(target.title == "Swift Documentation")
     #expect(target.url.host == "www.swift.org")
 
@@ -100,10 +100,11 @@ import Testing
         )
     )
     try controller.poll()
-    #expect(controller.targets(for: chrome).isEmpty)
-    try controller.preflight(targets: [target])
+    #expect(controller.tabTargets(for: chrome).isEmpty)
+    try controller.preflight(targets: enforcementTargets([target]))
     #expect(
-        try controller.start(allowing: [target]) == .awaitingConfirmation
+        try controller.start(allowing: enforcementTargets([target]))
+            == .awaitingConfirmation
     )
     #expect(
         try client.readNextMessage()
@@ -127,7 +128,9 @@ import Testing
         )
     )
     try controller.poll()
-    #expect(try controller.start(allowing: [target]) == .active)
+    #expect(
+        try controller.start(allowing: enforcementTargets([target])) == .active
+    )
 
     var blockedNavigationCount = 0
     controller.onBlockedNavigation = {
@@ -194,7 +197,7 @@ import Testing
         displayName: "Google Chrome",
         bundleIdentifier: "com.google.Chrome"
     )
-    let targets = controller.targets(for: chrome)
+    let targets = controller.tabTargets(for: chrome)
     let website = try #require(targets.first(where: {
         $0.tabIdentifier.rawValue == 31
     }))
@@ -212,9 +215,9 @@ import Testing
         navigationScope: .exactPage
     )
 
-    try controller.preflight(targets: [website, exactPage])
+    try controller.preflight(targets: enforcementTargets([website, exactPage]))
     #expect(
-        try controller.start(allowing: [website, exactPage])
+        try controller.start(allowing: enforcementTargets([website, exactPage]))
             == .awaitingConfirmation
     )
     #expect(
@@ -246,7 +249,10 @@ import Testing
         )
     )
     try controller.poll()
-    #expect(try controller.start(allowing: [website, exactPage]) == .active)
+    #expect(
+        try controller.start(allowing: enforcementTargets([website, exactPage]))
+            == .active
+    )
 
     var closedTarget: TargetIdentifier?
     controller.onTabTargetClosed = { closedTarget = $0 }
@@ -268,6 +274,121 @@ import Testing
 }
 
 @MainActor
+@Test func nativeBridgeStartsBroadWindowAndPreciseTabTargetsAtomically() throws {
+    let socketURL = temporaryBridgeSocketURL()
+    let controller = try NativeBridgeController(socketURL: socketURL)
+    let client = try LocalBridgeClient(socketURL: socketURL)
+    let profileIdentifier = "profile-broad-window"
+    try client.send(
+        .hello(
+            extensionIdentifier: StayPaneBridgeConstants.extensionIdentifier,
+            profileIdentifier: profileIdentifier
+        )
+    )
+    try controller.poll()
+    _ = try client.readNextMessage()
+    _ = try client.readNextMessage()
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profileIdentifier,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 31,
+                    windowIdentifier: 7,
+                    title: "Broad work window",
+                    url: "chrome://settings/",
+                    faviconDataURL: nil,
+                    windowBounds: BridgeWindowBounds(
+                        left: 120,
+                        top: 80,
+                        width: 1_200,
+                        height: 800
+                    ),
+                    isActive: true,
+                    isIncognito: false
+                ),
+                BridgeTabSnapshot(
+                    tabIdentifier: 32,
+                    windowIdentifier: 8,
+                    title: "Reference",
+                    url: "https://docs.example/reference?v=1",
+                    faviconDataURL: nil,
+                    isActive: false,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    try controller.poll()
+    let chrome = ApplicationTarget(
+        displayName: "Google Chrome",
+        bundleIdentifier: "com.google.Chrome"
+    )
+    let window = try #require(
+        controller.windowTargets(for: chrome).first(where: {
+            $0.windowIdentifier.rawValue == 7
+        })
+    )
+    #expect(window.title == "Broad work window")
+    #expect(
+        window.frame == BrowserWindowFrame(
+            x: 120,
+            y: 80,
+            width: 1_200,
+            height: 800
+        )
+    )
+    let tab = try #require(controller.tabTargets(for: chrome).first)
+    let browserTargets: [BrowserEnforcementTarget] = [
+        .window(window),
+        .tab(tab),
+    ]
+
+    try controller.preflight(targets: browserTargets)
+    #expect(
+        try controller.start(allowing: browserTargets)
+            == .awaitingConfirmation
+    )
+    #expect(
+        try client.readNextMessage()
+            == .beginEnforcement(
+                profileIdentifier: profileIdentifier,
+                targets: [
+                    .window(windowIdentifier: 7),
+                    BridgeEnforcementTarget(
+                        tabIdentifier: 32,
+                        windowIdentifier: 8,
+                        navigationScope: .currentWebsite(
+                            initialURL: "https://docs.example/reference?v=1"
+                        )
+                    )
+                ]
+            )
+    )
+    try client.send(
+        .enforcementStarted(
+            profileIdentifier: profileIdentifier,
+            windowIdentifiers: [7],
+            tabIdentifiers: [32]
+        )
+    )
+    try controller.poll()
+    #expect(try controller.start(allowing: browserTargets) == .active)
+
+    var closedWindowTarget: TargetIdentifier?
+    controller.onBrowserWindowTargetClosed = { closedWindowTarget = $0 }
+    try client.send(
+        .browserWindowTargetClosed(
+            profileIdentifier: profileIdentifier,
+            windowIdentifier: 7
+        )
+    )
+    try controller.poll()
+    #expect(closedWindowTarget == window.targetIdentifier)
+    try controller.refresh()
+}
+
+@MainActor
 @Test func disconnectedBridgeRefusesBrowserPreflight() throws {
     let controller = try NativeBridgeController(
         socketURL: temporaryBridgeSocketURL()
@@ -286,7 +407,7 @@ import Testing
     )
 
     #expect(throws: NativeBridgeError.disconnected) {
-        try controller.preflight(targets: [target])
+        try controller.preflight(targets: enforcementTargets([target]))
     }
 }
 
@@ -301,7 +422,8 @@ import Testing
     let target = try savedBrowserTarget(profileIdentifier: "profile-late")
 
     #expect(
-        try controller.resume(allowing: [target]) == .awaitingAvailability
+        try controller.resume(allowing: enforcementTargets([target]))
+            == .awaitingAvailability
     )
     let client = try LocalBridgeClient(socketURL: socketURL)
     try client.send(
@@ -311,7 +433,8 @@ import Testing
         )
     )
     #expect(
-        try controller.resume(allowing: [target]) == .awaitingAvailability
+        try controller.resume(allowing: enforcementTargets([target]))
+            == .awaitingAvailability
     )
     _ = try client.readNextMessage()
     _ = try client.readNextMessage()
@@ -332,7 +455,8 @@ import Testing
         )
     )
     #expect(
-        try controller.resume(allowing: [target]) == .awaitingConfirmation
+        try controller.resume(allowing: enforcementTargets([target]))
+            == .awaitingConfirmation
     )
     _ = try client.readNextMessage()
     try client.send(
@@ -342,7 +466,9 @@ import Testing
         )
     )
     try controller.poll()
-    #expect(try controller.resume(allowing: [target]) == .active)
+    #expect(
+        try controller.resume(allowing: enforcementTargets([target])) == .active
+    )
 }
 
 @MainActor
@@ -388,7 +514,9 @@ import Testing
         )
     )
 
-    let result = try controller.resume(allowing: [remaining, closed])
+    let result = try controller.resume(
+        allowing: enforcementTargets([remaining, closed])
+    )
     try #require(result == .awaitingConfirmation)
     #expect(
         try client.readNextMessage()
@@ -414,7 +542,9 @@ import Testing
     try controller.poll()
 
     #expect(
-        try controller.resume(allowing: [remaining, closed]) == .active
+        try controller.resume(
+            allowing: enforcementTargets([remaining, closed])
+        ) == .active
     )
 }
 
@@ -428,11 +558,12 @@ import Testing
     let target = try savedBrowserTarget(profileIdentifier: "profile-missing")
 
     #expect(
-        try controller.resume(allowing: [target]) == .awaitingAvailability
+        try controller.resume(allowing: enforcementTargets([target]))
+            == .awaitingAvailability
     )
     currentTime = currentTime.addingTimeInterval(5)
     #expect(throws: NativeBridgeError.disconnected) {
-        try controller.resume(allowing: [target])
+        try controller.resume(allowing: enforcementTargets([target]))
     }
 }
 
@@ -469,7 +600,7 @@ import Testing
     )
     try controller.poll()
     let target = try #require(
-        controller.targets(
+        controller.tabTargets(
             for: ApplicationTarget(
                 displayName: "Google Chrome",
                 bundleIdentifier: "com.google.Chrome"
@@ -478,7 +609,8 @@ import Testing
     )
 
     #expect(
-        try controller.start(allowing: [target]) == .awaitingConfirmation
+        try controller.start(allowing: enforcementTargets([target]))
+            == .awaitingConfirmation
     )
     _ = try client.readNextMessage()
     try client.send(
@@ -492,7 +624,7 @@ import Testing
     #expect(
         throws: NativeBridgeError.extensionReported(.targetMissing)
     ) {
-        try controller.start(allowing: [target])
+        try controller.start(allowing: enforcementTargets([target]))
     }
 }
 
@@ -561,9 +693,10 @@ import Testing
         displayName: "Google Chrome",
         bundleIdentifier: "com.google.Chrome"
     )
-    let target = try #require(controller.targets(for: chrome).first)
+    let target = try #require(controller.tabTargets(for: chrome).first)
     #expect(
-        try controller.start(allowing: [target]) == .awaitingConfirmation
+        try controller.start(allowing: enforcementTargets([target]))
+            == .awaitingConfirmation
     )
     _ = try client?.readNextMessage()
     try client?.send(
@@ -573,7 +706,9 @@ import Testing
         )
     )
     try controller.poll()
-    #expect(try controller.start(allowing: [target]) == .active)
+    #expect(
+        try controller.start(allowing: enforcementTargets([target])) == .active
+    )
 
     client = nil
     try controller.poll()
@@ -608,4 +743,10 @@ private func savedBrowserTarget(
             bundleIdentifier: "com.google.Chrome"
         )
     )
+}
+
+private func enforcementTargets(
+    _ tabs: [BrowserTabTarget]
+) -> [BrowserEnforcementTarget] {
+    tabs.map(BrowserEnforcementTarget.tab)
 }

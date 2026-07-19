@@ -3,18 +3,18 @@ import {
   requireProfileIdentifier,
 } from "./identifiers.js";
 
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 export const EXTENSION_ID = "hoofhoedlagpoclhkgnkmejaihaapoke";
 export const NATIVE_HOST_NAME = "com.staypane.native_bridge";
 
 export type HelloAcknowledged = {
-  version: 3;
+  version: 4;
   type: "helloAck";
   profileId: string;
 };
 
 export type RequestTabs = {
-  version: 3;
+  version: 4;
   type: "requestTabs";
   profileId: string;
 };
@@ -33,21 +33,31 @@ export type NavigationScopeCommand =
   | CurrentWebsiteScopeCommand
   | ExactPageScopeCommand;
 
-export type EnforcementTargetCommand = {
+export type EnforcementWindowTargetCommand = {
+  type: "window";
+  windowId: number;
+};
+
+export type EnforcementTabTargetCommand = {
+  type: "tab";
   tabId: number;
   windowId: number;
   navigationScope: NavigationScopeCommand;
 };
 
+export type EnforcementTargetCommand =
+  | EnforcementWindowTargetCommand
+  | EnforcementTabTargetCommand;
+
 export type BeginEnforcement = {
-  version: 3;
+  version: 4;
   type: "beginEnforcement";
   profileId: string;
   targets: EnforcementTargetCommand[];
 };
 
 export type EndEnforcement = {
-  version: 3;
+  version: 4;
   type: "endEnforcement";
   profileId: string;
 };
@@ -64,8 +74,16 @@ export type ExtensionTabSnapshot = {
   title: string;
   url: string;
   faviconDataUrl?: string;
+  windowBounds?: ExtensionWindowBounds;
   active: boolean;
   incognito: boolean;
+};
+
+export type ExtensionWindowBounds = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 };
 
 export function makeHello(profileId: string) {
@@ -164,15 +182,35 @@ export function makeBlockedNavigation(profileId: string, tabId: number) {
 
 export function makeEnforcementStarted(
   profileId: string,
+  windowIds: number[],
   tabIds: number[],
 ) {
   requireProfileIdentifier(profileId);
-  requireUniqueChromeIdentifiers(tabIds);
+  requireUniqueChromeIdentifiers(windowIds, true);
+  requireUniqueChromeIdentifiers(tabIds, true);
+  if (windowIds.length + tabIds.length === 0) {
+    throw new Error("Enforcement confirmation requires a target");
+  }
   return {
     version: PROTOCOL_VERSION,
     type: "enforcementStarted" as const,
     profileId,
+    windowIds,
     tabIds,
+  };
+}
+
+export function makeBrowserWindowTargetClosed(
+  profileId: string,
+  windowId: number,
+) {
+  requireProfileIdentifier(profileId);
+  requireChromeIdentifier(windowId);
+  return {
+    version: PROTOCOL_VERSION,
+    type: "browserWindowTargetClosed" as const,
+    profileId,
+    windowId,
   };
 }
 
@@ -286,21 +324,54 @@ function requireEnforcementTargets(value: unknown): EnforcementTargetCommand[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 128) {
     throw new Error("Invalid enforcement targets");
   }
-  const targets = value.map((candidate) => {
+  const targets = value.map((candidate): EnforcementTargetCommand => {
     const record = requireRecord(candidate);
-    requireExactKeys(record, ["tabId", "windowId", "navigationScope"]);
-    return {
-      tabId: requireChromeIdentifier(record.tabId),
-      windowId: requireChromeIdentifier(record.windowId),
-      navigationScope: requireNavigationScope(record.navigationScope),
-    };
+    if (record.type === "window") {
+      requireExactKeys(record, ["type", "windowId"]);
+      return {
+        type: "window",
+        windowId: requireChromeIdentifier(record.windowId),
+      };
+    }
+    if (record.type === "tab") {
+      requireExactKeys(record, [
+        "type",
+        "tabId",
+        "windowId",
+        "navigationScope",
+      ]);
+      return {
+        type: "tab",
+        tabId: requireChromeIdentifier(record.tabId),
+        windowId: requireChromeIdentifier(record.windowId),
+        navigationScope: requireNavigationScope(record.navigationScope),
+      };
+    }
+    throw new Error("Invalid enforcement target type");
   });
-  requireUniqueChromeIdentifiers(targets.map((target) => target.tabId));
+  const windowIds = targets
+    .filter((target): target is EnforcementWindowTargetCommand =>
+      target.type === "window")
+    .map((target) => target.windowId);
+  const tabTargets = targets.filter(
+    (target): target is EnforcementTabTargetCommand => target.type === "tab",
+  );
+  requireUniqueChromeIdentifiers(windowIds, true);
+  requireUniqueChromeIdentifiers(
+    tabTargets.map((target) => target.tabId),
+    true,
+  );
+  if (tabTargets.some((target) => windowIds.includes(target.windowId))) {
+    throw new Error("Redundant browser enforcement target");
+  }
   return targets;
 }
 
-function requireUniqueChromeIdentifiers(values: number[]): void {
-  if (values.length === 0 || values.length > 128) {
+function requireUniqueChromeIdentifiers(
+  values: number[],
+  allowsEmpty = false,
+): void {
+  if ((!allowsEmpty && values.length === 0) || values.length > 128) {
     throw new Error("Invalid Chrome identifier set");
   }
   for (const value of values) {

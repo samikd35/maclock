@@ -4,7 +4,7 @@ import Testing
 
 @Test func handshakeMessageRoundTripsThroughTheVersionedContract() throws {
     let json = Data(
-        #"{"version":3,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#.utf8
+        #"{"version":4,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#.utf8
     )
 
     let message = try BridgeMessageCodec.decode(json)
@@ -29,6 +29,12 @@ import Testing
                 title: "Project plan",
                 url: "https://work.example/project",
                 faviconDataURL: "data:image/png;base64,iVBORw0KGgo=",
+                windowBounds: BridgeWindowBounds(
+                    left: 120,
+                    top: 80,
+                    width: 1_200,
+                    height: 800
+                ),
                 isActive: true,
                 isIncognito: false
             )
@@ -43,9 +49,10 @@ import Testing
     #expect(decoded.direction == .extensionToNative)
 }
 
-@Test func multiTabStartConfirmationRoundTripsTowardTheMacApp() throws {
+@Test func broadWindowAndTabStartConfirmationRoundTripsTowardTheMacApp() throws {
     let message = BridgeMessage.enforcementStarted(
         profileIdentifier: "profile-one",
+        windowIdentifiers: [9],
         tabIdentifiers: [41, 42]
     )
 
@@ -56,10 +63,11 @@ import Testing
     #expect(message.direction == .extensionToNative)
 }
 
-@Test func mixedNavigationScopesRoundTripInOneAtomicStartCommand() throws {
+@Test func broadWindowAndMixedNavigationScopesRoundTripAtomically() throws {
     let message = BridgeMessage.beginEnforcement(
         profileIdentifier: "profile-one",
         targets: [
+            .window(windowIdentifier: 8),
             BridgeEnforcementTarget(
                 tabIdentifier: 41,
                 windowIdentifier: 9,
@@ -82,6 +90,18 @@ import Testing
             == message
     )
     #expect(message.direction == .nativeToExtension)
+}
+
+@Test func closedBrowserWindowTargetNoticeCarriesNoBrowsingContent() throws {
+    let message = BridgeMessage.browserWindowTargetClosed(
+        profileIdentifier: "profile-one",
+        windowIdentifier: 8
+    )
+
+    let encoded = try BridgeMessageCodec.encode(message)
+
+    #expect(try BridgeMessageCodec.decode(encoded) == message)
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("http"))
 }
 
 @Test func closedTabTargetNoticeRoundTripsWithoutBrowsingContent() throws {
@@ -136,13 +156,14 @@ import Testing
 
 @Test(arguments: [
     #"{"version":1,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#,
-    #"{"version":3,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
-    #"{"version":3,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
-    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
-    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
-    #"{"version":3,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
-    #"{"version":3,"type":"beginEnforcement","profileId":"profile-one","targets":[{"tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}]}"#,
-    #"{"version":3,"type":"unknown"}"#
+    #"{"version":4,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,
+    #"{"version":4,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one","extra":true}"#,
+    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":-1,"windowId":9,"title":"Bad","url":"https://example.com","active":true,"incognito":false}]}"#,
+    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,not@@@","active":true,"incognito":false}]}"#,
+    #"{"version":4,"type":"tabsSnapshot","profileId":"profile-one","tabs":[{"tabId":1,"windowId":9,"title":"Bad","url":"https://example.com","faviconDataUrl":"data:image/png;base64,SGVsbG8=","active":true,"incognito":false}]}"#,
+    #"{"version":4,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"chrome://settings"}}]}"#,
+    #"{"version":4,"type":"beginEnforcement","profileId":"profile-one","targets":[{"type":"window","windowId":9},{"type":"tab","tabId":1,"windowId":9,"navigationScope":{"type":"currentWebsite","initialUrl":"https://example.com"}}]}"#,
+    #"{"version":4,"type":"unknown"}"#
 ])
 func malformedNativeMessagesAreRejected(_ json: String) {
     #expect(throws: BridgeProtocolError.self) {
@@ -169,7 +190,7 @@ func malformedNativeMessagesAreRejected(_ json: String) {
 }
 
 @Test func nativeFramingWaitsForCompleteMessagesAndRejectsOversizeInput() throws {
-    let payload = Data(#"{"version":3,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
+    let payload = Data(#"{"version":4,"type":"requestTabs","profileId":"profile-one"}"#.utf8)
     let framed = try NativeMessageFramer.frame(payload)
     var incomplete = Data(framed.dropLast())
 

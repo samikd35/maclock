@@ -102,7 +102,7 @@ struct StayPaneMenuView: View {
                 .controlSize(.large)
             Text("Resuming Session")
                 .font(.title2.weight(.semibold))
-            Text("StayPane is verifying the saved Chrome Tab Target before restoring enforcement.")
+            Text("StayPane is verifying the saved Tab Target before restoring enforcement.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Text(
@@ -207,8 +207,14 @@ struct StayPaneMenuView: View {
                 if !model.selectedApplicationIDs.isEmpty {
                     broadApplicationWarning
                 }
+                if model.selectedApplicationIDs.contains("com.google.Chrome") {
+                    broadChromeApplicationWarning
+                }
                 if !model.selectedWindowIDs.isEmpty {
                     preciseWindowNote
+                }
+                if !model.selectedBrowserWindowIDs.isEmpty {
+                    broadChromeWindowWarning
                 }
                 if !model.selectedBrowserTabIDs.isEmpty {
                     preciseBrowserTabNote
@@ -333,10 +339,26 @@ struct StayPaneMenuView: View {
                 broadApplicationWarning
             }
             if model.configuredTargets.contains(where: {
+                guard case let .application(application) = $0 else {
+                    return false
+                }
+                return model.isChromeApplication(
+                    application.bundleIdentifier
+                )
+            }) {
+                broadChromeApplicationWarning
+            }
+            if model.configuredTargets.contains(where: {
                 if case .window = $0 { return true }
                 return false
             }) {
                 preciseWindowNote
+            }
+            if model.configuredTargets.contains(where: {
+                if case .browserWindow = $0 { return true }
+                return false
+            }) {
+                broadChromeWindowWarning
             }
             if model.configuredTargets.contains(where: {
                 if case .browserTab = $0 { return true }
@@ -437,7 +459,7 @@ struct StayPaneMenuView: View {
                 }
             }
 
-            Text("Other application windows are minimized. For a selected Chrome tab, activating another tab immediately returns to the allowed tab.")
+            Text("Other targets are blocked according to the immutable Application Targets, Window Targets, Browser Window Targets, and Tab Targets chosen for this Session.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -820,13 +842,35 @@ struct StayPaneMenuView: View {
 
     private var preciseBrowserTabNote: some View {
         Label(
-            "Each Chrome Tab Target keeps its own immutable Navigation Scope. Current Website allows HTTP and HTTPS pages on the chosen hostname. Exact Page also locks the path and query while ignoring fragments. Activating an unapproved, duplicated, or newly opened tab is a Blocked Tab Activation.",
+            "Each Tab Target keeps its own immutable Navigation Scope. Current Website allows HTTP and HTTPS pages on the chosen hostname. Exact Page also locks the path and query while ignoring fragments. Activating an unapproved, duplicated, or newly opened tab is a Blocked Tab Activation.",
             systemImage: "rectangle.stack.badge.person.crop"
         )
         .font(.caption.weight(.medium))
         .foregroundStyle(.blue)
         .padding(10)
         .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var broadChromeApplicationWarning: some View {
+        Label(
+            "Selecting Chrome as an Application Target allows every current and future Chrome window, tab, and website. Navigation Scopes do not apply.",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.orange)
+        .padding(10)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var broadChromeWindowWarning: some View {
+        Label(
+            "A Browser Window Target allows every current and future tab and website inside that Chrome window. Navigation Scopes do not apply; other Chrome windows remain blocked.",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.orange)
+        .padding(10)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -894,7 +938,7 @@ struct StayPaneMenuView: View {
                 }
 
                 if model.isChromeApplication(application.id) {
-                    chromeTabPicker(for: application)
+                    chromeTargetPicker(for: application)
                 }
             } label: {
                 applicationToggle(application)
@@ -905,43 +949,75 @@ struct StayPaneMenuView: View {
     }
 
     @ViewBuilder
-    private func chromeTabPicker(
+    private func chromeTargetPicker(
         for application: ApplicationCatalogItem
     ) -> some View {
         Divider()
             .padding(.leading, 24)
-        Label("Chrome tabs", systemImage: "rectangle.stack")
+        Label("Chrome windows and tabs", systemImage: "rectangle.stack")
             .font(.caption.weight(.semibold))
             .padding(.leading, 24)
 
         if !model.nativeBridgeConnected {
-            Text("Connect the Chrome companion above to choose an individual tab.")
+            Text("Connect the Chrome companion above to choose a Chrome window or individual tab.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 28)
-        } else if model.browserTabs(for: application.id).isEmpty {
-            Text("No eligible tabs reported by Chrome")
+        } else if model.browserWindows(for: application.id).isEmpty {
+            Text("No eligible Chrome windows reported")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 28)
         } else {
-            let groups = Dictionary(
-                grouping: model.browserTabs(for: application.id),
-                by: \.windowIdentifier
-            )
             ForEach(
-                groups.keys.sorted { $0.rawValue < $1.rawValue },
-                id: \.self
-            ) { windowIdentifier in
+                model.browserWindows(for: application.id),
+                id: \.targetIdentifier
+            ) { window in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Chrome window \(windowIdentifier.rawValue)")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    Toggle(
+                        isOn: Binding(
+                            get: {
+                                model.selectedBrowserWindowIDs.contains(
+                                    window.targetIdentifier
+                                )
+                            },
+                            set: {
+                                model.setBrowserWindow(
+                                    id: window.targetIdentifier,
+                                    isSelected: $0
+                                )
+                            }
+                        )
+                    ) {
+                        Label(
+                            window.title,
+                            systemImage: "macwindow"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .toggleStyle(.checkbox)
+                    .disabled(
+                        model.selectedApplicationIDs.contains(application.id)
+                    )
+                    .onHover {
+                        model.highlightBrowserWindow(
+                            window,
+                            isHighlighted: $0
+                        )
+                    }
                     ForEach(
-                        groups[windowIdentifier] ?? [],
+                        model.browserTabs(for: application.id).filter {
+                            $0.profileIdentifier == window.profileIdentifier
+                                && $0.windowIdentifier
+                                    == window.windowIdentifier
+                        },
                         id: \.targetIdentifier
                     ) { tab in
-                        browserTabToggle(tab, applicationID: application.id)
+                        browserTabToggle(
+                            tab,
+                            applicationID: application.id,
+                            parentWindowID: window.targetIdentifier
+                        )
                     }
                 }
                 .padding(.leading, 28)
@@ -951,7 +1027,8 @@ struct StayPaneMenuView: View {
 
     private func browserTabToggle(
         _ tab: BrowserTabTarget,
-        applicationID: String
+        applicationID: String,
+        parentWindowID: TargetIdentifier
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Toggle(
@@ -1017,7 +1094,10 @@ struct StayPaneMenuView: View {
                 .padding(.leading, 24)
             }
         }
-        .disabled(model.selectedApplicationIDs.contains(applicationID))
+        .disabled(
+            model.selectedApplicationIDs.contains(applicationID)
+                || model.selectedBrowserWindowIDs.contains(parentWindowID)
+        )
     }
 
     private func applicationToggle(
@@ -1093,6 +1173,14 @@ struct StayPaneMenuView: View {
             TargetPresentation(
                 label: "\(window.title) in \(window.application.displayName)",
                 reviewTitle: "Individual window in \(window.application.displayName)",
+                reviewValue: window.title,
+                systemImage: "macwindow.on.rectangle",
+                isBroadApplication: false
+            )
+        case let .browserWindow(window):
+            TargetPresentation(
+                label: window.title,
+                reviewTitle: "Browser Window Target",
                 reviewValue: window.title,
                 systemImage: "macwindow.on.rectangle",
                 isBroadApplication: false

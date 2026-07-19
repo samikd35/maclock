@@ -1,7 +1,7 @@
 import Foundation
 
 public enum StayPaneBridgeConstants {
-    public static let protocolVersion = 3
+    public static let protocolVersion = 4
     public static let nativeHostName = "com.staypane.native_bridge"
     public static let extensionIdentifier = "hoofhoedlagpoclhkgnkmejaihaapoke"
     public static let allowedOrigin = "chrome-extension://\(extensionIdentifier)/"
@@ -12,19 +12,24 @@ public enum BridgeNavigationScope: Equatable, Sendable {
     case exactPage(initialURL: String)
 }
 
-public struct BridgeEnforcementTarget: Equatable, Sendable {
-    public let tabIdentifier: Int
-    public let windowIdentifier: Int
-    public let navigationScope: BridgeNavigationScope
+public enum BridgeEnforcementTarget: Equatable, Sendable {
+    case window(windowIdentifier: Int)
+    case tab(
+        tabIdentifier: Int,
+        windowIdentifier: Int,
+        navigationScope: BridgeNavigationScope
+    )
 
     public init(
         tabIdentifier: Int,
         windowIdentifier: Int,
         navigationScope: BridgeNavigationScope
     ) {
-        self.tabIdentifier = tabIdentifier
-        self.windowIdentifier = windowIdentifier
-        self.navigationScope = navigationScope
+        self = .tab(
+            tabIdentifier: tabIdentifier,
+            windowIdentifier: windowIdentifier,
+            navigationScope: navigationScope
+        )
     }
 }
 
@@ -40,12 +45,27 @@ public enum BridgeMessageDirection: Equatable, Sendable {
     case nativeToExtension
 }
 
+public struct BridgeWindowBounds: Equatable, Sendable {
+    public let left: Int
+    public let top: Int
+    public let width: Int
+    public let height: Int
+
+    public init(left: Int, top: Int, width: Int, height: Int) {
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+    }
+}
+
 public struct BridgeTabSnapshot: Equatable, Sendable {
     public let tabIdentifier: Int
     public let windowIdentifier: Int
     public let title: String
     public let url: String
     public let faviconDataURL: String?
+    public let windowBounds: BridgeWindowBounds?
     public let isActive: Bool
     public let isIncognito: Bool
 
@@ -55,6 +75,7 @@ public struct BridgeTabSnapshot: Equatable, Sendable {
         title: String,
         url: String,
         faviconDataURL: String?,
+        windowBounds: BridgeWindowBounds? = nil,
         isActive: Bool,
         isIncognito: Bool
     ) {
@@ -63,6 +84,7 @@ public struct BridgeTabSnapshot: Equatable, Sendable {
         self.title = title
         self.url = url
         self.faviconDataURL = faviconDataURL
+        self.windowBounds = windowBounds
         self.isActive = isActive
         self.isIncognito = isIncognito
     }
@@ -97,8 +119,13 @@ public enum BridgeMessage: Equatable, Sendable {
         profileIdentifier: String,
         tabIdentifier: Int
     )
+    case browserWindowTargetClosed(
+        profileIdentifier: String,
+        windowIdentifier: Int
+    )
     case enforcementStarted(
         profileIdentifier: String,
+        windowIdentifiers: [Int],
         tabIdentifiers: [Int]
     )
     case enforcementError(
@@ -116,13 +143,27 @@ public enum BridgeMessage: Equatable, Sendable {
         switch self {
         case .hello, .tabsSnapshot, .tabActivated,
              .blockedTabActivation, .blockedNavigation,
-             .tabTargetClosed, .enforcementStarted,
+             .tabTargetClosed, .browserWindowTargetClosed,
+             .enforcementStarted,
              .enforcementError:
             .extensionToNative
         case .helloAcknowledged, .requestTabs, .beginEnforcement,
              .endEnforcement:
             .nativeToExtension
         }
+    }
+}
+
+public extension BridgeMessage {
+    static func enforcementStarted(
+        profileIdentifier: String,
+        tabIdentifiers: [Int]
+    ) -> Self {
+        .enforcementStarted(
+            profileIdentifier: profileIdentifier,
+            windowIdentifiers: [],
+            tabIdentifiers: tabIdentifiers
+        )
     }
 }
 
@@ -248,16 +289,41 @@ public enum BridgeMessageCodec {
                 )
             )
 
+        case "browserWindowTargetClosed":
+            try requireKeys(
+                dictionary,
+                exactly: ["version", "type", "profileId", "windowId"]
+            )
+            return .browserWindowTargetClosed(
+                profileIdentifier: try requiredProfileIdentifier(dictionary),
+                windowIdentifier: try requiredPositiveInteger(
+                    dictionary,
+                    key: "windowId"
+                )
+            )
+
         case "enforcementStarted":
             try requireKeys(
                 dictionary,
-                exactly: ["version", "type", "profileId", "tabIds"]
+                exactly: [
+                    "version", "type", "profileId", "windowIds", "tabIds"
+                ]
             )
+            let windowIdentifiers = try decodeUniqueIdentifiers(
+                dictionary["windowIds"],
+                allowsEmpty: true
+            )
+            let tabIdentifiers = try decodeUniqueIdentifiers(
+                dictionary["tabIds"],
+                allowsEmpty: true
+            )
+            guard !windowIdentifiers.isEmpty || !tabIdentifiers.isEmpty else {
+                throw BridgeProtocolError.invalidSchema
+            }
             return .enforcementStarted(
                 profileIdentifier: try requiredProfileIdentifier(dictionary),
-                tabIdentifiers: try decodeUniqueIdentifiers(
-                    dictionary["tabIds"]
-                )
+                windowIdentifiers: windowIdentifiers,
+                tabIdentifiers: tabIdentifiers
             )
 
         case "enforcementError":
@@ -354,10 +420,24 @@ public enum BridgeMessageCodec {
                 "profileId": profileIdentifier,
                 "tabId": tabIdentifier
             ]) { _, new in new }
-        case let .enforcementStarted(profileIdentifier, tabIdentifiers):
+        case let .browserWindowTargetClosed(
+            profileIdentifier,
+            windowIdentifier
+        ):
+            object.merge([
+                "type": "browserWindowTargetClosed",
+                "profileId": profileIdentifier,
+                "windowId": windowIdentifier
+            ]) { _, new in new }
+        case let .enforcementStarted(
+            profileIdentifier,
+            windowIdentifiers,
+            tabIdentifiers
+        ):
             object.merge([
                 "type": "enforcementStarted",
                 "profileId": profileIdentifier,
+                "windowIds": windowIdentifiers,
                 "tabIds": tabIdentifiers
             ]) { _, new in new }
         case let .enforcementError(profileIdentifier, code):
@@ -404,7 +484,7 @@ public enum BridgeMessageCodec {
         let requiredKeys: Set<String> = [
             "tabId", "windowId", "title", "url", "active", "incognito"
         ]
-        let allowedKeys = requiredKeys.union(["faviconDataUrl"])
+        let allowedKeys = requiredKeys.union(["faviconDataUrl", "windowBounds"])
         guard requiredKeys.isSubset(of: dictionary.keys),
               Set(dictionary.keys).isSubset(of: allowedKeys),
               let title = validatedString(dictionary["title"], maximum: 2_048),
@@ -426,6 +506,9 @@ public enum BridgeMessageCodec {
         } else {
             faviconDataURL = nil
         }
+        let windowBounds = try dictionary["windowBounds"].map(
+            decodeWindowBounds
+        )
         return BridgeTabSnapshot(
             tabIdentifier: try requiredPositiveInteger(dictionary, key: "tabId"),
             windowIdentifier: try requiredPositiveInteger(
@@ -435,6 +518,7 @@ public enum BridgeMessageCodec {
             title: title,
             url: url,
             faviconDataURL: faviconDataURL,
+            windowBounds: windowBounds,
             isActive: isActive,
             isIncognito: isIncognito
         )
@@ -452,7 +536,44 @@ public enum BridgeMessageCodec {
         if let faviconDataURL = tab.faviconDataURL {
             object["faviconDataUrl"] = faviconDataURL
         }
+        if let bounds = tab.windowBounds {
+            object["windowBounds"] = [
+                "left": bounds.left,
+                "top": bounds.top,
+                "width": bounds.width,
+                "height": bounds.height
+            ]
+        }
         return object
+    }
+
+    private static func decodeWindowBounds(
+        _ value: Any
+    ) throws -> BridgeWindowBounds {
+        guard let dictionary = value as? [String: Any] else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        try requireKeys(
+            dictionary,
+            exactly: ["left", "top", "width", "height"]
+        )
+        guard let left = integer(dictionary["left"]),
+              let top = integer(dictionary["top"]),
+              let width = integer(dictionary["width"]),
+              let height = integer(dictionary["height"]),
+              abs(Double(left)) <= 1_000_000,
+              abs(Double(top)) <= 1_000_000,
+              1...1_000_000 ~= width,
+              1...1_000_000 ~= height
+        else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        return BridgeWindowBounds(
+            left: left,
+            top: top,
+            width: width,
+            height: height
+        )
     }
 
     private static func decodeNavigationScope(
@@ -502,29 +623,67 @@ public enum BridgeMessageCodec {
         else {
             throw BridgeProtocolError.invalidSchema
         }
-        let targets = try values.map { value in
+        let targets = try values.map { value -> BridgeEnforcementTarget in
             guard let dictionary = value as? [String: Any] else {
                 throw BridgeProtocolError.invalidSchema
             }
-            try requireKeys(
-                dictionary,
-                exactly: ["tabId", "windowId", "navigationScope"]
-            )
-            return BridgeEnforcementTarget(
-                tabIdentifier: try requiredPositiveInteger(
+            guard let type = validatedString(dictionary["type"], maximum: 64)
+            else {
+                throw BridgeProtocolError.invalidSchema
+            }
+            switch type {
+            case "window":
+                try requireKeys(
                     dictionary,
-                    key: "tabId"
-                ),
-                windowIdentifier: try requiredPositiveInteger(
-                    dictionary,
-                    key: "windowId"
-                ),
-                navigationScope: try decodeNavigationScope(
-                    dictionary["navigationScope"]
+                    exactly: ["type", "windowId"]
                 )
-            )
+                return .window(
+                    windowIdentifier: try requiredPositiveInteger(
+                        dictionary,
+                        key: "windowId"
+                    )
+                )
+            case "tab":
+                try requireKeys(
+                    dictionary,
+                    exactly: [
+                        "type", "tabId", "windowId", "navigationScope"
+                    ]
+                )
+                return .tab(
+                    tabIdentifier: try requiredPositiveInteger(
+                        dictionary,
+                        key: "tabId"
+                    ),
+                    windowIdentifier: try requiredPositiveInteger(
+                        dictionary,
+                        key: "windowId"
+                    ),
+                    navigationScope: try decodeNavigationScope(
+                        dictionary["navigationScope"]
+                    )
+                )
+            default:
+                throw BridgeProtocolError.invalidSchema
+            }
         }
-        guard Set(targets.map(\.tabIdentifier)).count == targets.count else {
+        let windowIdentifiers = targets.compactMap { target -> Int? in
+            guard case let .window(windowIdentifier) = target else {
+                return nil
+            }
+            return windowIdentifier
+        }
+        let tabTargets = targets.compactMap { target -> (Int, Int)? in
+            guard case let .tab(tabIdentifier, windowIdentifier, _) = target
+            else {
+                return nil
+            }
+            return (tabIdentifier, windowIdentifier)
+        }
+        guard Set(windowIdentifiers).count == windowIdentifiers.count,
+              Set(tabTargets.map(\.0)).count == tabTargets.count,
+              tabTargets.allSatisfy({ !windowIdentifiers.contains($0.1) })
+        else {
             throw BridgeProtocolError.invalidSchema
         }
         return targets
@@ -533,18 +692,28 @@ public enum BridgeMessageCodec {
     private static func encodeEnforcementTarget(
         _ target: BridgeEnforcementTarget
     ) -> [String: Any] {
-        [
-            "tabId": target.tabIdentifier,
-            "windowId": target.windowIdentifier,
-            "navigationScope": encodeNavigationScope(target.navigationScope)
-        ]
+        switch target {
+        case let .window(windowIdentifier):
+            [
+                "type": "window",
+                "windowId": windowIdentifier
+            ]
+        case let .tab(tabIdentifier, windowIdentifier, navigationScope):
+            [
+                "type": "tab",
+                "tabId": tabIdentifier,
+                "windowId": windowIdentifier,
+                "navigationScope": encodeNavigationScope(navigationScope)
+            ]
+        }
     }
 
     private static func decodeUniqueIdentifiers(
-        _ value: Any?
+        _ value: Any?,
+        allowsEmpty: Bool = false
     ) throws -> [Int] {
         guard let values = value as? [Any],
-              1...128 ~= values.count
+              (allowsEmpty ? 0...128 : 1...128) ~= values.count
         else {
             throw BridgeProtocolError.invalidSchema
         }

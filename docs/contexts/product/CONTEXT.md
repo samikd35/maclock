@@ -24,6 +24,10 @@ _Avoid_: App lock, application exception
 A precise Target representing one currently existing window and qualifying transient children attached to it.
 _Avoid_: Window title, document target
 
+**Browser Window Target**:
+A broad Target representing one currently existing browser window and all tabs and websites it contains now or later during a Session. Its current title and observed frame make it recognizable in the picker but are not its identity.
+_Avoid_: Website target, scoped window, tab group
+
 **Tab Target**:
 A precise Target representing one currently existing, non-Incognito browser tab within one Browser Profile. Its identity determines which tab remains available, while its immutable Navigation Scope determines which top-level content may remain in that tab.
 _Avoid_: Website target, tab title, browser exception

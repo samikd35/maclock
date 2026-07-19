@@ -1,9 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  chooseWindowsToMinimizeAtStart,
+  findInitiallyMinimizedWindowIds,
   chooseInitialAvailableTabsByWindow,
-  decideTabActivation,
+  decideChromeActivation,
 } from "../dist/tab-policy.js";
+
+test("start captures only uncovered restorable Chrome windows", () => {
+  assert.deepEqual(
+    chooseWindowsToMinimizeAtStart(
+      [
+        { windowId: 7, state: "normal" },
+        { windowId: 8, state: "maximized" },
+        { windowId: 9, state: "fullscreen" },
+        { windowId: 10, state: "minimized" },
+      ],
+      [7, 9],
+    ),
+    [{ windowId: 8, previousState: "maximized" }],
+  );
+});
+
+test("start remembers windows that were already minimized", () => {
+  assert.deepEqual(
+    findInitiallyMinimizedWindowIds([
+      { windowId: 7, state: "normal" },
+      { windowId: 8, state: "minimized" },
+      { windowId: 9, state: "minimized" },
+    ]),
+    [8, 9],
+  );
+});
 
 test("start activates an Available Tab Target in every selected Chrome window", () => {
   assert.deepEqual(
@@ -17,82 +45,112 @@ test("start activates an Available Tab Target in every selected Chrome window", 
   );
 });
 
-test("each selected tab can become the most recently activated Available Tab Target", () => {
+test("every tab in an allowed Chrome window is available without becoming precise", () => {
   assert.deepEqual(
-    decideTabActivation({
-      availableTabIds: [7, 8],
-      attemptedTabId: 8,
-      lastActivatedAvailableTabId: 7,
+    decideChromeActivation({
+      allowedWindowIds: [9],
+      availableTabIds: [7],
+      attemptedTabId: 90,
+      attemptedWindowId: 9,
+      lastActivatedTarget: { type: "tab", tabId: 7 },
       now: 10_000,
       lastFeedbackAt: 8_000,
       feedbackIntervalMs: 2_000,
     }),
     {
-      restoreTabId: null,
+      restoreTarget: null,
       closeAttemptedTab: false,
       shouldNotify: false,
       nextFeedbackAt: 8_000,
-      nextLastActivatedAvailableTabId: 8,
+      nextLastActivatedTarget: { type: "window", windowId: 9 },
     },
   );
 });
 
-test("an unapproved activation restores the most recent available target", () => {
+test("an uncovered Chrome window restores the most recent broad window", () => {
   assert.deepEqual(
-    decideTabActivation({
+    decideChromeActivation({
+      allowedWindowIds: [9],
       availableTabIds: [7, 8],
       attemptedTabId: 99,
-      lastActivatedAvailableTabId: 8,
+      attemptedWindowId: 12,
+      lastActivatedTarget: { type: "window", windowId: 9 },
       now: 10_000,
       lastFeedbackAt: null,
       feedbackIntervalMs: 2_000,
     }),
     {
-      restoreTabId: 8,
+      restoreTarget: { type: "window", windowId: 9 },
       closeAttemptedTab: false,
       shouldNotify: true,
       nextFeedbackAt: 10_000,
-      nextLastActivatedAvailableTabId: 8,
+      nextLastActivatedTarget: { type: "window", windowId: 9 },
     },
   );
 });
 
-test("closure falls back without broadening another tab policy", () => {
+test("a precise tab in an uncovered window remains independently available", () => {
   assert.deepEqual(
-    decideTabActivation({
-      availableTabIds: [7],
-      attemptedTabId: 99,
-      lastActivatedAvailableTabId: 8,
+    decideChromeActivation({
+      allowedWindowIds: [9],
+      availableTabIds: [7, 8],
+      attemptedTabId: 8,
+      attemptedWindowId: 12,
+      lastActivatedTarget: { type: "window", windowId: 9 },
       now: 10_500,
       lastFeedbackAt: 10_000,
       feedbackIntervalMs: 2_000,
     }),
     {
-      restoreTabId: 7,
+      restoreTarget: null,
       closeAttemptedTab: false,
       shouldNotify: false,
       nextFeedbackAt: 10_000,
-      nextLastActivatedAvailableTabId: 7,
+      nextLastActivatedTarget: { type: "tab", tabId: 8 },
     },
   );
 });
 
-test("when every selected tab closed an unapproved new tab cannot broaden access", () => {
+test("closure falls back to another configured target without broadening policy", () => {
   assert.deepEqual(
-    decideTabActivation({
-      availableTabIds: [],
+    decideChromeActivation({
+      allowedWindowIds: [9],
+      availableTabIds: [7],
       attemptedTabId: 99,
-      lastActivatedAvailableTabId: null,
+      attemptedWindowId: 12,
+      lastActivatedTarget: { type: "tab", tabId: 8 },
       now: 10_000,
       lastFeedbackAt: null,
       feedbackIntervalMs: 2_000,
     }),
     {
-      restoreTabId: null,
+      restoreTarget: { type: "window", windowId: 9 },
+      closeAttemptedTab: false,
+      shouldNotify: true,
+      nextFeedbackAt: 10_000,
+      nextLastActivatedTarget: { type: "window", windowId: 9 },
+    },
+  );
+});
+
+test("when every browser target closed a new tab cannot broaden access", () => {
+  assert.deepEqual(
+    decideChromeActivation({
+      allowedWindowIds: [],
+      availableTabIds: [],
+      attemptedTabId: 99,
+      attemptedWindowId: 12,
+      lastActivatedTarget: null,
+      now: 10_000,
+      lastFeedbackAt: null,
+      feedbackIntervalMs: 2_000,
+    }),
+    {
+      restoreTarget: null,
       closeAttemptedTab: true,
       shouldNotify: true,
       nextFeedbackAt: 10_000,
-      nextLastActivatedAvailableTabId: null,
+      nextLastActivatedTarget: null,
     },
   );
 });

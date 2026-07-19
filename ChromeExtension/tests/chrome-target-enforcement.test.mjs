@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ChromeTabEnforcementCoordinator } from "../dist/navigation-enforcement.js";
+import { ChromeTargetEnforcementCoordinator } from "../dist/chrome-target-enforcement.js";
 import {
   createCurrentWebsiteScope,
   createExactPageScope,
 } from "../dist/navigation-policy.js";
-import { loadTabActivationEnforcement } from "../dist/tab-activation-store.js";
+import { loadStoredChromeTargetState } from "../dist/chrome-target-enforcement-store.js";
 
 test("cross-host commits restore the selected tab and publish bounded feedback", async () => {
   const harness = makeHarness();
@@ -89,7 +89,7 @@ test("a matching completed document becomes the Last Allowed Page", async () => 
     url: "http://work.example:8080/next?step=2",
   });
 
-  const stored = await loadTabActivationEnforcement(harness.store);
+  const stored = await loadStoredChromeTargetState(harness.store);
   assert.equal(
     stored.availableTargets[0].navigationScope.lastAllowedUrl,
     "http://work.example:8080/next?step=2",
@@ -117,7 +117,7 @@ test("history changes before completion remain pending", async () => {
     url: "https://work.example/loading?state=changed",
   });
 
-  const pending = await loadTabActivationEnforcement(harness.store);
+  const pending = await loadStoredChromeTargetState(harness.store);
   assert.equal(
     pending.availableTargets[0].navigationScope.lastAllowedUrl,
     "https://work.example/project",
@@ -183,7 +183,7 @@ test("opened links transfer or close without expanding the immutable tab", async
   ]);
   assert.deepEqual(harness.closedTabs, [90, 91]);
   assert.equal(
-    (await loadTabActivationEnforcement(harness.store)).availableTargets[0].tabId,
+    (await loadStoredChromeTargetState(harness.store)).availableTargets[0].tabId,
     41,
   );
 });
@@ -349,9 +349,9 @@ test("activation, attachment, and closure update only runtime availability", asy
   await harness.enforcer.handle({ type: "removed", tabId: 42 });
   await harness.enforcer.handle({ type: "activated", tabId: 99 });
 
-  const stored = await loadTabActivationEnforcement(harness.store);
+  const stored = await loadStoredChromeTargetState(harness.store);
   assert.deepEqual(stored.availableTargets.map((target) => target.tabId), [41]);
-  assert.equal(stored.lastActivatedAvailableTabId, 41);
+  assert.deepEqual(stored.lastActivatedTarget, { type: "tab", tabId: 41 });
   assert.deepEqual(harness.activations, [41]);
   assert.deepEqual(harness.closedTargetNotices, [["profile_one", 42]]);
   assert.deepEqual(
@@ -379,7 +379,7 @@ test("a duplicated or attached unapproved identity never joins the allowlist", a
   await harness.enforcer.handle({ type: "activated", tabId: 90 });
 
   assert.deepEqual(
-    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+    (await loadStoredChromeTargetState(harness.store)).availableTargets.map(
       (target) => target.tabId,
     ),
     [41],
@@ -407,7 +407,7 @@ test("a replaced selected identity is removed before its replacement activates",
   });
 
   assert.deepEqual(
-    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+    (await loadStoredChromeTargetState(harness.store)).availableTargets.map(
       (target) => target.tabId,
     ),
     [41],
@@ -462,14 +462,14 @@ test("a target that disappears before a restore falls back without failing open"
       "https://docs.example/reference?v=1",
     ),
   });
-  enforcement.lastActivatedAvailableTabId = 42;
+  enforcement.lastActivatedTarget = { type: "tab", tabId: 42 };
   await harness.enforcer.start(enforcement);
 
   await harness.enforcer.handle({ type: "activated", tabId: 99 });
 
   assert.deepEqual(harness.activations, [42, 41]);
   assert.deepEqual(
-    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+    (await loadStoredChromeTargetState(harness.store)).availableTargets.map(
       (target) => target.tabId,
     ),
     [41],
@@ -502,7 +502,7 @@ test("a target that closes during navigation restore is removed cleanly", async 
     [42, "https://docs.example/reference?v=1"],
   ]);
   assert.deepEqual(
-    (await loadTabActivationEnforcement(harness.store)).availableTargets.map(
+    (await loadStoredChromeTargetState(harness.store)).availableTargets.map(
       (target) => target.tabId,
     ),
     [41],
@@ -544,12 +544,210 @@ test("stop remains final when a blocked navigation effect is in flight", async (
   releaseNavigation();
   await Promise.all([blocked, stopped]);
 
-  assert.equal(await loadTabActivationEnforcement(harness.store), null);
+  assert.equal(await loadStoredChromeTargetState(harness.store), null);
+});
+
+test("a broad Chrome window allows all tabs, sites, and new tab creation inside it", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.availableTargets = [];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "committed",
+    tabId: 90,
+    frameId: 0,
+    documentId: "any-site",
+    url: "https://video.example/watch",
+  });
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 91,
+    windowId: 9,
+    sourceTabId: 90,
+    pendingUrl: "https://social.example/feed",
+    url: "about:blank",
+  });
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 91,
+    windowId: 9,
+  });
+
+  assert.deepEqual(harness.navigations, []);
+  assert.deepEqual(harness.closedTabs, []);
+  assert.deepEqual(harness.activations, []);
+  assert.deepEqual(harness.windowActivations, []);
+});
+
+test("an uncovered Chrome window restores the selected broad window", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+    windowId: 12,
+  });
+
+  assert.deepEqual(harness.windowActivations, [9]);
+  assert.deepEqual(
+    harness.activationNotices,
+    [["profile_one", 99, 9009]],
+  );
+});
+
+test("an uncovered Chrome window is minimized and restored on stop", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+    windowId: 12,
+  });
+
+  assert.deepEqual(harness.minimizedWindows, [12]);
+  assert.deepEqual(
+    (await loadStoredChromeTargetState(harness.store)).minimizedWindows,
+    [{ windowId: 12, previousState: "maximized" }],
+  );
+
+  await harness.enforcer.stop();
+
+  assert.deepEqual(harness.restoredWindows, [[12, "maximized"]]);
+  assert.equal(await loadStoredChromeTargetState(harness.store), null);
+});
+
+test("a window minimized before start is reblocked without being restored", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.initiallyMinimizedWindowIds = [12];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "activated",
+    tabId: 99,
+    windowId: 12,
+  });
+  await harness.enforcer.stop();
+
+  assert.deepEqual(harness.minimizedWindows, [12, 12]);
+  assert.deepEqual(harness.restoredWindows, []);
+});
+
+test("failed Chrome restoration is retained and reported for retry", async () => {
+  const unavailableRestoreWindowIds = [12];
+  const harness = makeHarness({ unavailableRestoreWindowIds });
+  const enforcement = makeEnforcement();
+  enforcement.minimizedWindows = [
+    { windowId: 12, previousState: "normal" },
+  ];
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.stop();
+
+  const retained = await loadStoredChromeTargetState(harness.store);
+  assert.equal(retained.state, "restorationPending");
+  assert.deepEqual(retained.minimizedWindows, [
+    { windowId: 12, previousState: "normal" },
+  ]);
+  assert.deepEqual(
+    harness.restorationFailures,
+    [["profile_one", [12]]],
+  );
+
+  unavailableRestoreWindowIds.length = 0;
+  assert.equal(await harness.enforcer.retryPendingRestoration(), true);
+  assert.equal(await loadStoredChromeTargetState(harness.store), null);
+  assert.deepEqual(harness.restoredWindows, [[12, "normal"]]);
+});
+
+test("moving an active tab across a selected window boundary reapplies policy", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.availableTargets = [];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 90,
+    windowId: 9,
+    isActive: true,
+  });
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 90,
+    windowId: 12,
+    isActive: true,
+  });
+
+  assert.deepEqual(harness.windowActivations, [9]);
+});
+
+test("a precise tab moved out of a broad window regains its Navigation Scope", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.availableTargets[0].windowId = 12;
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 41,
+    windowId: 9,
+    url: "https://video.example/watch",
+    isActive: true,
+  });
+  assert.deepEqual(harness.navigations, []);
+  await harness.enforcer.handle({
+    type: "attached",
+    tabId: 41,
+    windowId: 12,
+    url: "https://video.example/watch",
+    isActive: true,
+  });
+
+  assert.deepEqual(harness.navigations, [
+    [41, "https://work.example/project"],
+  ]);
+});
+
+test("closing a broad window removes only that runtime target", async () => {
+  const harness = makeHarness();
+  const enforcement = makeEnforcement();
+  enforcement.allowedWindowIds = [9];
+  enforcement.lastActivatedTarget = { type: "window", windowId: 9 };
+  await harness.enforcer.start(enforcement);
+
+  await harness.enforcer.handle({ type: "windowRemoved", windowId: 9 });
+  const stored = await loadStoredChromeTargetState(harness.store);
+
+  assert.deepEqual(stored.allowedWindowIds, []);
+  assert.deepEqual(stored.availableTargets.map((target) => target.tabId), [41]);
+  assert.deepEqual(stored.lastActivatedTarget, { type: "tab", tabId: 41 });
+  assert.deepEqual(harness.closedWindowNotices, [["profile_one", 9]]);
 });
 
 function makeEnforcement() {
   return {
+    state: "active",
     profileId: "profile_one",
+    allowedWindowIds: [],
+    initiallyMinimizedWindowIds: [],
+    minimizedWindows: [],
     availableTargets: [
       {
         tabId: 41,
@@ -559,12 +757,12 @@ function makeEnforcement() {
         ),
       },
     ],
-    lastActivatedAvailableTabId: 41,
+    lastActivatedTarget: { type: "tab", tabId: 41 },
   };
 }
 
 async function storedTarget(store, tabId) {
-  const enforcement = await loadTabActivationEnforcement(store);
+  const enforcement = await loadStoredChromeTargetState(store);
   return enforcement.availableTargets.find((target) => target.tabId === tabId);
 }
 
@@ -587,8 +785,13 @@ function makeHarness(options = {}) {
   const activations = [];
   const activationNotices = [];
   const closedTargetNotices = [];
+  const windowActivations = [];
+  const closedWindowNotices = [];
+  const minimizedWindows = [];
+  const restoredWindows = [];
+  const restorationFailures = [];
   let currentTime = 10_000;
-  const enforcer = new ChromeTabEnforcementCoordinator({
+  const enforcer = new ChromeTargetEnforcementCoordinator({
     store,
     platform: {
       async navigateTab(tabId, url) {
@@ -605,6 +808,26 @@ function makeHarness(options = {}) {
         activations.push(tabId);
         return !(options.unavailableActivationTabIds ?? []).includes(tabId);
       },
+      async activateWindow(windowId) {
+        windowActivations.push(windowId);
+        return (options.unavailableActivationWindowIds ?? []).includes(windowId)
+          ? null
+          : 9_000 + windowId;
+      },
+      async captureWindowState() {
+        return "maximized";
+      },
+      async minimizeWindow(windowId) {
+        minimizedWindows.push(windowId);
+        return "minimized";
+      },
+      async restoreWindow(windowId, state) {
+        if ((options.unavailableRestoreWindowIds ?? []).includes(windowId)) {
+          throw new Error("restore failed");
+        }
+        restoredWindows.push([windowId, state]);
+        return "restored";
+      },
       blockedNavigation(profileId, tabId) {
         blockedNotices.push([profileId, tabId]);
       },
@@ -614,6 +837,12 @@ function makeHarness(options = {}) {
       tabTargetClosed(profileId, tabId) {
         closedTargetNotices.push([profileId, tabId]);
         options.lifecycleEvents?.push(`closed:${tabId}`);
+      },
+      browserWindowTargetClosed(profileId, windowId) {
+        closedWindowNotices.push([profileId, windowId]);
+      },
+      restorationFailed(profileId, windowIds) {
+        restorationFailures.push([profileId, windowIds]);
       },
     },
     now: () => {
@@ -632,5 +861,10 @@ function makeHarness(options = {}) {
     activations,
     activationNotices,
     closedTargetNotices,
+    windowActivations,
+    closedWindowNotices,
+    minimizedWindows,
+    restoredWindows,
+    restorationFailures,
   };
 }

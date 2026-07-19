@@ -10,11 +10,13 @@ export type FaviconResponse = {
 
 export type TabSnapshotPort = {
   queryTabs(): Promise<chrome.tabs.Tab[]>;
+  queryWindows(): Promise<chrome.windows.Window[]>;
   loadFavicon(pageURL: string): Promise<FaviconResponse>;
 };
 
 const chromeTabSnapshotPort: TabSnapshotPort = {
   queryTabs: async () => chrome.tabs.query({}),
+  queryWindows: async () => chrome.windows.getAll(),
   loadFavicon: async (pageURL) => {
     const faviconURL = new URL(chrome.runtime.getURL("/_favicon/"));
     faviconURL.searchParams.set("pageUrl", pageURL);
@@ -32,8 +34,20 @@ export async function collectTabSnapshots(
   port: TabSnapshotPort = chromeTabSnapshotPort,
 ): Promise<ExtensionTabSnapshot[]> {
   const tabs = await port.queryTabs();
+  const windowBoundsByIdentifier = new Map(
+    (await port.queryWindows()).flatMap((window) => {
+      const bounds = validatedWindowBounds(window);
+      return window.id === undefined || bounds === null
+        ? []
+        : [[window.id, bounds] as const];
+    }),
+  );
   const snapshots = await Promise.all(
-    tabs.map((tab) => makeTabSnapshot(tab, port)),
+    tabs.map((tab) => makeTabSnapshot(
+      tab,
+      windowBoundsByIdentifier.get(tab.windowId),
+      port,
+    )),
   );
   return fitTabsToNativeMessageBudget(
     profileIdentifier,
@@ -45,6 +59,12 @@ export async function collectTabSnapshots(
 
 async function makeTabSnapshot(
   tab: chrome.tabs.Tab,
+  windowBounds: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | undefined,
   port: TabSnapshotPort,
 ): Promise<ExtensionTabSnapshot | null> {
   if (
@@ -65,8 +85,41 @@ async function makeTabSnapshot(
     title,
     url,
     ...(faviconDataUrl === null ? {} : { faviconDataUrl }),
+    ...(windowBounds === undefined ? {} : { windowBounds }),
     active: tab.active,
     incognito: tab.incognito,
+  };
+}
+
+function validatedWindowBounds(
+  window: chrome.windows.Window,
+): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} | null {
+  const values = [window.left, window.top, window.width, window.height];
+  if (
+    values.some((value) => !Number.isSafeInteger(value)) ||
+    window.left === undefined ||
+    window.top === undefined ||
+    window.width === undefined ||
+    window.height === undefined ||
+    Math.abs(window.left) > 1_000_000 ||
+    Math.abs(window.top) > 1_000_000 ||
+    window.width < 1 ||
+    window.width > 1_000_000 ||
+    window.height < 1 ||
+    window.height > 1_000_000
+  ) {
+    return null;
+  }
+  return {
+    left: window.left,
+    top: window.top,
+    width: window.width,
+    height: window.height,
   };
 }
 

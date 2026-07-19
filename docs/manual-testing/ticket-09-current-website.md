@@ -6,7 +6,7 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 
 1. Run `make app`, `make test`, and `make test-extension` from the repository root.
 2. Open `.build/StayPane.app`, register the Native Host, and confirm the Chrome companion is connected.
-3. In `chrome://extensions`, reload **StayPane Chrome Companion** after every rebuild. Version 0.3.0 speaks Native Bridge protocol version 3; an older loaded build cannot start the current tab enforcement contract.
+3. In `chrome://extensions`, reload **StayPane Chrome Companion** after every rebuild. Version 0.4.0 speaks Native Bridge protocol version 4; an older loaded build cannot start the current browser-enforcement contract.
 4. Pin the extension if you want to observe its brief orange `SITE` badge.
 
 ## Scope presentation and eligibility
@@ -29,7 +29,7 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 2. Repeat with a subdomain, a hostname-suffix lookalike, and a browser-internal URL such as `chrome://settings`. All are outside the exact hostname rule.
 3. Follow a URL that redirects from the allowed hostname to another hostname. The redirect destination must not replace the Last Allowed Page.
 4. Attempt several blocked navigations rapidly. Every attempt must return, while the extension badge and StayPane notice remain rate limited.
-5. Confirm the notice explains that StayPane returned the selected Chrome Tab Target to its Navigation Scope without displaying a URL, title, hostname, or browsing content.
+5. Confirm the notice explains that StayPane returned the selected Tab Target to its Navigation Scope without displaying a URL, title, hostname, or browsing content.
 
 ## Links that open a new tab
 
@@ -47,5 +47,5 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 ## Automated and privacy checks
 
 1. Run `make test-extension`. Policy and adapter tests cover schemes, exact hostnames, paths, queries, fragments, ports, redirects, top-level frames, rapid blocks, Last Allowed Page, same-scope transfers, cross-scope closes, immutable tab identity, and serialized stop races.
-2. Run `make test`. Swift tests cover the default Current Website scope, backward-compatible Recovery decoding, strict protocol version 3 messages, content-free Blocked Navigation notices, web-tab eligibility, and real local socket delivery.
+2. Run `make test`. Swift tests cover the default Current Website scope, backward-compatible Recovery decoding, strict protocol version 4 messages, content-free Blocked Navigation notices, web-tab eligibility, and real local socket delivery.
 3. Inspect extension storage and Native Bridge traffic. Active local enforcement may contain its exact Tab Target and Current Website URL, but completed Session History and exported Diagnostics must contain no tab title, URL, hostname, or domain.

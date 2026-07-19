@@ -4,46 +4,46 @@ import Foundation
 final class CoordinatedSessionEnforcement {
     private enum State {
         case idle
-        case awaitingTabActivation
+        case awaitingBrowserEnforcement
         case active
     }
 
     private let applicationAndWindowEnforcement: any SessionEnforcing
-    private let tabActivationEnforcement: any TabActivationEnforcing
+    private let browserEnforcement: any BrowserEnforcing
     private var state: State = .idle
 
     init(
         applicationAndWindowEnforcement: any SessionEnforcing,
-        tabActivationEnforcement: any TabActivationEnforcing
+        browserEnforcement: any BrowserEnforcing
     ) {
         self.applicationAndWindowEnforcement = applicationAndWindowEnforcement
-        self.tabActivationEnforcement = tabActivationEnforcement
+        self.browserEnforcement = browserEnforcement
     }
 
     func preflight(targets: [SessionTarget]) throws {
-        try tabActivationEnforcement.preflight(
-            targets: tabTargets(in: targets)
+        try browserEnforcement.preflight(
+            targets: browserTargets(in: targets)
         )
     }
 
     func start(
         allowing targets: [SessionTarget]
     ) throws -> CoordinatedSessionEnforcementResult {
-        let tabStartResult: TabActivationStartResult
+        let browserStartResult: BrowserEnforcementStartResult
         do {
-            tabStartResult = try tabActivationEnforcement.start(
-                allowing: tabTargets(in: targets)
+            browserStartResult = try browserEnforcement.start(
+                allowing: browserTargets(in: targets)
             )
         } catch {
-            if case .awaitingTabActivation = state {
-                tabActivationEnforcement.stop()
+            if case .awaitingBrowserEnforcement = state {
+                browserEnforcement.stop()
             }
             state = .idle
             throw error
         }
-        guard tabStartResult == .active else {
-            state = .awaitingTabActivation
-            return .awaitingTabActivation
+        guard browserStartResult == .active else {
+            state = .awaitingBrowserEnforcement
+            return .awaitingBrowserEnforcement
         }
         do {
             try applicationAndWindowEnforcement.start(
@@ -51,7 +51,7 @@ final class CoordinatedSessionEnforcement {
             )
             state = .active
         } catch {
-            tabActivationEnforcement.stop()
+            browserEnforcement.stop()
             state = .idle
             throw error
         }
@@ -61,11 +61,11 @@ final class CoordinatedSessionEnforcement {
     func resume(
         allowing targets: [SessionTarget]
     ) throws -> CoordinatedSessionEnforcementResult {
-        guard try tabActivationEnforcement.resume(
-            allowing: tabTargets(in: targets)
+        guard try browserEnforcement.resume(
+            allowing: browserTargets(in: targets)
         ) == .active else {
-            state = .awaitingTabActivation
-            return .awaitingTabActivation
+            state = .awaitingBrowserEnforcement
+            return .awaitingBrowserEnforcement
         }
         do {
             try applicationAndWindowEnforcement.resume(
@@ -73,7 +73,7 @@ final class CoordinatedSessionEnforcement {
             )
             state = .active
         } catch {
-            tabActivationEnforcement.stop()
+            browserEnforcement.stop()
             state = .idle
             throw error
         }
@@ -82,34 +82,40 @@ final class CoordinatedSessionEnforcement {
 
     func refresh() throws {
         try applicationAndWindowEnforcement.refresh()
-        try tabActivationEnforcement.refresh()
+        try browserEnforcement.refresh()
     }
 
     func stop() {
         switch state {
         case .idle:
             break
-        case .awaitingTabActivation:
-            tabActivationEnforcement.stop()
+        case .awaitingBrowserEnforcement:
+            browserEnforcement.stop()
         case .active:
             applicationAndWindowEnforcement.stop()
-            tabActivationEnforcement.stop()
+            browserEnforcement.stop()
         }
         state = .idle
     }
 
     func restorePersistedState() {
         applicationAndWindowEnforcement.stop()
-        tabActivationEnforcement.stop()
+        browserEnforcement.stop()
         state = .idle
     }
 
-    private func tabTargets(in targets: [SessionTarget]) -> [BrowserTabTarget] {
+    private func browserTargets(
+        in targets: [SessionTarget]
+    ) -> [BrowserEnforcementTarget] {
         targets.compactMap { target in
-            guard case let .browserTab(tab) = target else {
+            switch target {
+            case let .browserWindow(window):
+                return .window(window)
+            case let .browserTab(tab):
+                return .tab(tab)
+            case .application, .window:
                 return nil
             }
-            return tab
         }
     }
 
@@ -120,6 +126,8 @@ final class CoordinatedSessionEnforcement {
         for target in targets {
             let mappedTarget: SessionTarget
             switch target {
+            case let .browserWindow(window):
+                mappedTarget = .application(window.application)
             case let .browserTab(tab):
                 mappedTarget = .application(tab.application)
             case .application, .window:
@@ -134,6 +142,6 @@ final class CoordinatedSessionEnforcement {
 }
 
 enum CoordinatedSessionEnforcementResult: Equatable {
-    case awaitingTabActivation
+    case awaitingBrowserEnforcement
     case active
 }

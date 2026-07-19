@@ -192,21 +192,21 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 11 — Support broad Chrome application and window targets
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Complete Chrome's application/window/tab hierarchy so users can intentionally trade precision for a broader browser workflow.
 
 **Blocked by:** 08 — Connect one Chrome tab through the native bridge.
 
-- [ ] Selecting the Chrome application allows every current and future Chrome window, tab, and website.
-- [ ] Selecting one Chrome window allows every current and future tab inside that window.
-- [ ] Chrome application selection disables redundant Chrome window and tab controls.
-- [ ] Chrome window selection disables redundant tab controls beneath that window.
-- [ ] Deselecting a broad parent restores the ability to choose precise children.
-- [ ] Broad Chrome targets show a clear warning that they permit more distraction paths and do not apply page scopes.
-- [ ] Chrome windows not covered by a window-level target remain blocked.
-- [ ] Broad-target behavior survives tab creation, tab movement, window activation, and normal session completion.
-- [ ] Policy tests cover every parent-child combination and transition available before start.
+- [x] Selecting the Chrome application allows every current and future Chrome window, tab, and website.
+- [x] Selecting one Chrome window allows every current and future tab inside that window.
+- [x] Chrome application selection disables redundant Chrome window and tab controls.
+- [x] Chrome window selection disables redundant tab controls beneath that window.
+- [x] Deselecting a broad parent restores the ability to choose precise children.
+- [x] Broad Chrome targets show a clear warning that they permit more distraction paths and do not apply page scopes.
+- [x] Chrome windows not covered by a window-level target remain blocked.
+- [x] Broad-target behavior survives tab creation, tab movement, window activation, and normal session completion.
+- [x] Policy tests cover every parent-child combination and transition available before start.
 
 ## 12 — Harden Chrome profiles, Incognito, and connection failures
 

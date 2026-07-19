@@ -29,6 +29,79 @@ public enum BrowserNavigationScope: String, Codable, Equatable, Hashable, Sendab
     case exactPage
 }
 
+public struct BrowserWindowFrame: Codable, Equatable, Hashable, Sendable {
+    public let x: Int
+    public let y: Int
+    public let width: Int
+    public let height: Int
+
+    public init(x: Int, y: Int, width: Int, height: Int) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct BrowserWindowTarget: Codable, Equatable, Hashable, Sendable {
+    public let profileIdentifier: BrowserProfileIdentifier
+    public let windowIdentifier: BrowserWindowIdentifier
+    public let title: String
+    public let frame: BrowserWindowFrame?
+    public let application: ApplicationTarget
+
+    public init(
+        profileIdentifier: BrowserProfileIdentifier,
+        windowIdentifier: BrowserWindowIdentifier,
+        title: String = "Chrome window",
+        frame: BrowserWindowFrame? = nil,
+        application: ApplicationTarget
+    ) {
+        self.profileIdentifier = profileIdentifier
+        self.windowIdentifier = windowIdentifier
+        self.title = title
+        self.frame = frame
+        self.application = application
+    }
+
+    public var targetIdentifier: TargetIdentifier {
+        .browserWindow(
+            profileIdentifier: profileIdentifier,
+            windowIdentifier: windowIdentifier
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileIdentifier
+        case windowIdentifier
+        case title
+        case frame
+        case application
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        profileIdentifier = try container.decode(
+            BrowserProfileIdentifier.self,
+            forKey: .profileIdentifier
+        )
+        windowIdentifier = try container.decode(
+            BrowserWindowIdentifier.self,
+            forKey: .windowIdentifier
+        )
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+            ?? "Chrome window \(windowIdentifier.rawValue)"
+        frame = try container.decodeIfPresent(
+            BrowserWindowFrame.self,
+            forKey: .frame
+        )
+        application = try container.decode(
+            ApplicationTarget.self,
+            forKey: .application
+        )
+    }
+}
+
 public struct BrowserTabTarget: Codable, Equatable, Hashable, Sendable {
     public let profileIdentifier: BrowserProfileIdentifier
     public let tabIdentifier: BrowserTabIdentifier
@@ -120,5 +193,28 @@ public struct BrowserTabTarget: Codable, Equatable, Hashable, Sendable {
         )
         try container.encode(application, forKey: .application)
         try container.encode(navigationScope, forKey: .navigationScope)
+    }
+}
+
+public enum BrowserEnforcementTarget: Equatable, Hashable, Sendable {
+    case window(BrowserWindowTarget)
+    case tab(BrowserTabTarget)
+
+    public var profileIdentifier: BrowserProfileIdentifier {
+        switch self {
+        case let .window(window):
+            window.profileIdentifier
+        case let .tab(tab):
+            tab.profileIdentifier
+        }
+    }
+
+    public var targetIdentifier: TargetIdentifier {
+        switch self {
+        case let .window(window):
+            window.targetIdentifier
+        case let .tab(tab):
+            tab.targetIdentifier
+        }
     }
 }

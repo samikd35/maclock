@@ -5,7 +5,7 @@ This context describes the trusted local relationship between one Chrome Profile
 ## Language
 
 **Native Bridge**:
-The local-only messenger between the Chrome extension and StayPane that carries validated tab observations and enforcement commands.
+The local-only messenger between the Chrome extension and StayPane that carries validated tab observations, optional Chrome window bounds for hover association, and enforcement commands.
 _Avoid_: Server, browser backend, policy engine
 
 **Handshake**:
@@ -20,10 +20,14 @@ _Avoid_: Account connection, network session, browser session
 The local Chrome configuration that permits only the expected unpacked extension identity to launch the Native Bridge.
 _Avoid_: Extension install, account setup, server registration
 
-**Navigation Scope Command**:
-A versioned Native Bridge command that atomically starts enforcement for every selected Tab Target with each target's immutable Navigation Scope and initial web URL.
+**Browser Enforcement Command**:
+A versioned Native Bridge command that atomically starts Chrome Target Enforcement with broad Chrome window identities and precise Tab Targets carrying their immutable Navigation Scopes.
 _Avoid_: Website history, remote rule, browsing configuration
 
 **Blocked Navigation Notice**:
 A content-free Native Bridge event containing only the Chrome Profile and Tab Target identities needed to show bounded local feedback.
 _Avoid_: URL report, browsing event, website telemetry
+
+**Browser Target Closed Notice**:
+A content-free Native Bridge event identifying an Available Browser Window Target or Available Tab Target that disappeared during a Session.
+_Avoid_: Browser history, closed-page report, activity event

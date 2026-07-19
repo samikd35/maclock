@@ -4,19 +4,33 @@ import {
   decideOpenedTab,
 } from "./navigation-policy.js";
 import {
-  TabActivationEnforcement,
-  TabActivationStorePort,
+  ChromeTargetEnforcement,
+  ChromeTargetStateStorePort,
+  StoredChromeTargetState,
   AvailableTabTarget,
-  clearTabActivationEnforcement,
-  loadTabActivationEnforcement,
-  saveTabActivationEnforcement,
-} from "./tab-activation-store.js";
-import { decideTabActivation } from "./tab-policy.js";
+  clearStoredChromeTargetState,
+  loadStoredChromeTargetState,
+  saveStoredChromeTargetState,
+} from "./chrome-target-enforcement-store.js";
+import {
+  ChromeTargetReference,
+  RestorableChromeWindowState,
+  decideChromeActivation,
+} from "./tab-policy.js";
 
-export type ChromeTabEnforcementPlatform = {
+export type ChromeTargetEnforcementPlatform = {
   navigateTab(tabId: number, url: string): Promise<boolean>;
   closeTab(tabId: number): Promise<void>;
   activateTab(tabId: number): Promise<boolean>;
+  activateWindow(windowId: number): Promise<number | null>;
+  captureWindowState(
+    windowId: number,
+  ): Promise<RestorableChromeWindowState | null>;
+  minimizeWindow(windowId: number): Promise<"minimized" | "missing">;
+  restoreWindow(
+    windowId: number,
+    state: RestorableChromeWindowState,
+  ): Promise<"restored" | "missing">;
   blockedNavigation(profileId: string, tabId: number): void;
   blockedTabActivation(
     profileId: string,
@@ -24,6 +38,8 @@ export type ChromeTabEnforcementPlatform = {
     availableTabId: number | null,
   ): void;
   tabTargetClosed(profileId: string, tabId: number): void;
+  browserWindowTargetClosed(profileId: string, windowId: number): void;
+  restorationFailed(profileId: string, windowIds: number[]): void;
 };
 
 type DocumentNavigationEvent = {
@@ -33,7 +49,7 @@ type DocumentNavigationEvent = {
   url: string;
 };
 
-export type ChromeTabEnforcementEvent =
+export type ChromeTargetEnforcementEvent =
   | ({ type: "committed" } & DocumentNavigationEvent)
   | ({ type: "completed" } & DocumentNavigationEvent)
   | ({ type: "historyUpdated" } & DocumentNavigationEvent)
@@ -41,39 +57,53 @@ export type ChromeTabEnforcementEvent =
   | {
       type: "openedTab";
       tabId: number;
+      windowId?: number;
       sourceTabId: number | undefined;
       pendingUrl: string | undefined;
       url: string | undefined;
     }
   | { type: "openedTabGraceExpired"; tabId: number }
-  | { type: "activated"; tabId: number }
+  | { type: "activated"; tabId: number; windowId?: number }
   | { type: "removed"; tabId: number }
-  | { type: "attached"; tabId: number; windowId: number }
-  | { type: "replaced"; addedTabId: number; removedTabId: number };
+  | {
+      type: "attached";
+      tabId: number;
+      windowId: number;
+      url?: string;
+      isActive?: boolean;
+    }
+  | {
+      type: "replaced";
+      addedTabId: number;
+      addedWindowId?: number;
+      removedTabId: number;
+    }
+  | { type: "windowRemoved"; windowId: number };
 
-export type ChromeTabEnforcementCoordinatorOptions = {
-  platform: ChromeTabEnforcementPlatform;
-  store?: TabActivationStorePort;
+export type ChromeTargetEnforcementCoordinatorOptions = {
+  platform: ChromeTargetEnforcementPlatform;
+  store?: ChromeTargetStateStorePort;
   now?: () => number;
   feedbackIntervalMs?: number;
 };
 
 /**
- * Owns every event that can change the runtime Available Tab Targets.
+ * Owns every event that can change runtime Available Browser Window Targets
+ * or Available Tab Targets.
  * Keeping these operations on one queue prevents activation, navigation,
  * attachment, replacement, and closure callbacks from racing one another.
  */
-export class ChromeTabEnforcementCoordinator {
+export class ChromeTargetEnforcementCoordinator {
   private operationTail: Promise<void> = Promise.resolve();
   private lastFeedbackAt: number | null = null;
   private readonly handledOpenedTabs = new Set<number>();
   private readonly pendingOpenedTabs = new Map<number, number>();
-  private readonly platform: ChromeTabEnforcementPlatform;
-  private readonly store: TabActivationStorePort | undefined;
+  private readonly platform: ChromeTargetEnforcementPlatform;
+  private readonly store: ChromeTargetStateStorePort | undefined;
   private readonly now: () => number;
   private readonly feedbackIntervalMs: number;
 
-  constructor(options: ChromeTabEnforcementCoordinatorOptions) {
+  constructor(options: ChromeTargetEnforcementCoordinatorOptions) {
     this.platform = options.platform;
     this.store = options.store;
     this.now = options.now ?? Date.now;
@@ -81,11 +111,15 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   start(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     establish?: () => Promise<void>,
   ): Promise<void> {
     return this.serialized(async () => {
       this.resetTransientState();
+      const previous = await this.load();
+      if (previous !== null && !(await this.attemptRestoration(previous))) {
+        throw new Error("Previous Chrome window restoration is incomplete");
+      }
       await this.save(enforcement);
       await establish?.();
     });
@@ -94,14 +128,29 @@ export class ChromeTabEnforcementCoordinator {
   stop(): Promise<void> {
     return this.serialized(async () => {
       this.resetTransientState();
-      await this.clear();
+      const enforcement = await this.load();
+      if (enforcement !== null) {
+        await this.attemptRestoration(enforcement);
+      } else {
+        await this.clear();
+      }
     });
   }
 
-  handle(event: ChromeTabEnforcementEvent): Promise<void> {
+  retryPendingRestoration(): Promise<boolean> {
     return this.serialized(async () => {
       const enforcement = await this.load();
-      if (enforcement === null) {
+      if (enforcement === null || enforcement.state === "active") {
+        return true;
+      }
+      return this.attemptRestoration(enforcement);
+    });
+  }
+
+  handle(event: ChromeTargetEnforcementEvent): Promise<void> {
+    return this.serialized(async () => {
+      const enforcement = await this.load();
+      if (enforcement === null || enforcement.state !== "active") {
         return;
       }
       switch (event.type) {
@@ -124,20 +173,38 @@ export class ChromeTabEnforcementCoordinator {
           await this.handleOpenedTabGraceExpired(enforcement, event.tabId);
           return;
         case "activated":
-          await this.handleActivation(enforcement, event.tabId);
+          await this.handleActivation(
+            enforcement,
+            event.tabId,
+            event.windowId,
+          );
           return;
         case "removed":
           await this.handleRemoved(enforcement, event.tabId);
           return;
         case "attached":
-          await this.handleAttached(enforcement, event.tabId, event.windowId);
+          await this.handleAttached(
+            enforcement,
+            event.tabId,
+            event.windowId,
+            event.url,
+            event.isActive ?? false,
+          );
           return;
         case "replaced": {
           const next = await this.removeTarget(
             enforcement,
             event.removedTabId,
           );
-          await this.handleActivation(next, event.addedTabId);
+          await this.handleActivation(
+            next,
+            event.addedTabId,
+            event.addedWindowId,
+          );
+          return;
+        }
+        case "windowRemoved": {
+          await this.removeWindowTarget(enforcement, event.windowId);
           return;
         }
       }
@@ -145,10 +212,10 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleObservedURL(
-    enforcement: TabActivationEnforcement,
-    event: Extract<ChromeTabEnforcementEvent, { type: "urlChanged" }>,
+    enforcement: ChromeTargetEnforcement,
+    event: Extract<ChromeTargetEnforcementEvent, { type: "urlChanged" }>,
   ): Promise<void> {
-    const target = findTarget(enforcement, event.tabId);
+    const target = findNavigationScopedTarget(enforcement, event.tabId);
     if (target === undefined) {
       return;
     }
@@ -184,11 +251,14 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleCommitted(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     event: DocumentNavigationEvent,
   ): Promise<void> {
-    const target = findTarget(enforcement, event.tabId);
-    if (event.frameId !== 0 || target === undefined) {
+    const target = findNavigationScopedTarget(enforcement, event.tabId);
+    if (
+      event.frameId !== 0 ||
+      target === undefined
+    ) {
       return;
     }
     const decision = decideCommittedNavigation({
@@ -222,11 +292,14 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleCompleted(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     event: DocumentNavigationEvent,
   ): Promise<void> {
-    const target = findTarget(enforcement, event.tabId);
-    if (event.frameId !== 0 || target === undefined) {
+    const target = findNavigationScopedTarget(enforcement, event.tabId);
+    if (
+      event.frameId !== 0 ||
+      target === undefined
+    ) {
       return;
     }
     const nextScope = completeNavigationScope(
@@ -243,11 +316,14 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleHistoryUpdate(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     event: DocumentNavigationEvent,
   ): Promise<void> {
-    const target = findTarget(enforcement, event.tabId);
-    if (event.frameId !== 0 || target === undefined) {
+    const target = findNavigationScopedTarget(enforcement, event.tabId);
+    if (
+      event.frameId !== 0 ||
+      target === undefined
+    ) {
       return;
     }
     const wasPendingDocument =
@@ -295,10 +371,18 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleOpenedTab(
-    enforcement: TabActivationEnforcement,
-    event: Extract<ChromeTabEnforcementEvent, { type: "openedTab" }>,
+    enforcement: ChromeTargetEnforcement,
+    event: Extract<ChromeTargetEnforcementEvent, { type: "openedTab" }>,
   ): Promise<void> {
     if (this.handledOpenedTabs.has(event.tabId)) {
+      return;
+    }
+    if (
+      event.windowId !== undefined &&
+      enforcement.allowedWindowIds.includes(event.windowId)
+    ) {
+      this.pendingOpenedTabs.delete(event.tabId);
+      this.rememberHandledOpenedTab(event.tabId);
       return;
     }
     const sourceTabId =
@@ -352,7 +436,7 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleOpenedTabGraceExpired(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     tabId: number,
   ): Promise<void> {
     const sourceTabId = this.pendingOpenedTabs.get(tabId);
@@ -388,16 +472,19 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleActivation(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     attemptedTabId: number,
+    attemptedWindowId: number | undefined,
   ): Promise<void> {
     let current = enforcement;
     let shouldNotify = false;
     while (true) {
-      const decision = decideTabActivation({
+      const decision = decideChromeActivation({
+        allowedWindowIds: current.allowedWindowIds,
         availableTabIds: current.availableTargets.map((target) => target.tabId),
         attemptedTabId,
-        lastActivatedAvailableTabId: current.lastActivatedAvailableTabId,
+        attemptedWindowId,
+        lastActivatedTarget: current.lastActivatedTarget,
         now: this.now(),
         lastFeedbackAt: this.lastFeedbackAt,
         feedbackIntervalMs: this.feedbackIntervalMs,
@@ -405,13 +492,14 @@ export class ChromeTabEnforcementCoordinator {
       shouldNotify = shouldNotify || decision.shouldNotify;
       this.lastFeedbackAt = decision.nextFeedbackAt;
       if (
-        decision.nextLastActivatedAvailableTabId !==
-        current.lastActivatedAvailableTabId
+        !sameTargetReference(
+          decision.nextLastActivatedTarget,
+          current.lastActivatedTarget,
+        )
       ) {
         current = {
           ...current,
-          lastActivatedAvailableTabId:
-            decision.nextLastActivatedAvailableTabId,
+          lastActivatedTarget: decision.nextLastActivatedTarget,
         };
         await this.save(current);
       }
@@ -426,25 +514,48 @@ export class ChromeTabEnforcementCoordinator {
         }
         return;
       }
-      if (decision.restoreTabId === null) {
+      if (decision.restoreTarget === null) {
         return;
       }
-      if (await this.platform.activateTab(decision.restoreTabId)) {
+      if (
+        attemptedWindowId !== undefined &&
+        !isWindowCovered(current, attemptedWindowId)
+      ) {
+        current = await this.minimizeWindow(current, attemptedWindowId);
+      }
+      const restoredTabId = await this.activateTarget(decision.restoreTarget);
+      if (restoredTabId !== null) {
         if (shouldNotify) {
           this.platform.blockedTabActivation(
             current.profileId,
             attemptedTabId,
-            decision.restoreTabId,
+            restoredTabId,
           );
         }
         return;
       }
-      current = await this.removeTarget(current, decision.restoreTabId);
+      current = decision.restoreTarget.type === "window"
+        ? await this.removeWindowTarget(
+            current,
+            decision.restoreTarget.windowId,
+          )
+        : await this.removeTarget(current, decision.restoreTarget.tabId);
     }
   }
 
+  private async activateTarget(
+    target: ChromeTargetReference,
+  ): Promise<number | null> {
+    if (target.type === "window") {
+      return this.platform.activateWindow(target.windowId);
+    }
+    return (await this.platform.activateTab(target.tabId))
+      ? target.tabId
+      : null;
+  }
+
   private async handleRemoved(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     tabId: number,
   ): Promise<void> {
     this.pendingOpenedTabs.delete(tabId);
@@ -452,26 +563,24 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async removeTarget(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     tabId: number,
-  ): Promise<TabActivationEnforcement> {
+  ): Promise<ChromeTargetEnforcement> {
     if (findTarget(enforcement, tabId) === undefined) {
       return enforcement;
     }
     const availableTargets = enforcement.availableTargets.filter(
       (target) => target.tabId !== tabId,
     );
-    const lastActivatedAvailableTabId =
-      enforcement.lastActivatedAvailableTabId !== tabId &&
-      availableTargets.some(
-        (target) => target.tabId === enforcement.lastActivatedAvailableTabId,
-      )
-        ? enforcement.lastActivatedAvailableTabId
-        : (availableTargets[0]?.tabId ?? null);
+    const lastActivatedTarget =
+      enforcement.lastActivatedTarget?.type !== "tab" ||
+      enforcement.lastActivatedTarget.tabId !== tabId
+        ? enforcement.lastActivatedTarget
+        : firstAvailableTarget(enforcement.allowedWindowIds, availableTargets);
     const next = {
       ...enforcement,
       availableTargets,
-      lastActivatedAvailableTabId,
+      lastActivatedTarget,
     };
     await this.save(next);
     for (const [openedTabId, sourceTabId] of this.pendingOpenedTabs) {
@@ -486,22 +595,152 @@ export class ChromeTabEnforcementCoordinator {
   }
 
   private async handleAttached(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     tabId: number,
     windowId: number,
+    url: string | undefined,
+    isActive: boolean,
   ): Promise<void> {
     const target = findTarget(enforcement, tabId);
-    if (target === undefined || target.windowId === windowId) {
-      return;
+    let next = enforcement;
+    if (target !== undefined && target.windowId !== windowId) {
+      next = replacingTarget(enforcement, target, {
+        ...target,
+        windowId,
+      });
+      await this.save(next);
     }
-    await this.save(replacingTarget(enforcement, target, {
-      ...target,
-      windowId,
-    }));
+    if (target !== undefined && url !== undefined) {
+      await this.handleObservedURL(next, {
+        type: "urlChanged",
+        tabId,
+        url,
+      });
+      const current = await this.load();
+      if (current === null || current.state !== "active") {
+        return;
+      }
+      next = current;
+    }
+    if (isActive) {
+      await this.handleActivation(next, tabId, windowId);
+    }
+  }
+
+  private async removeWindowTarget(
+    enforcement: ChromeTargetEnforcement,
+    windowId: number,
+  ): Promise<ChromeTargetEnforcement> {
+    const wasAllowed = enforcement.allowedWindowIds.includes(windowId);
+    const wasMinimized = enforcement.minimizedWindows.some(
+      (window) => window.windowId === windowId,
+    );
+    if (!wasAllowed && !wasMinimized) {
+      return enforcement;
+    }
+    const allowedWindowIds = enforcement.allowedWindowIds.filter(
+      (candidate) => candidate !== windowId,
+    );
+    const lastActivatedTarget =
+      enforcement.lastActivatedTarget?.type !== "window" ||
+      enforcement.lastActivatedTarget.windowId !== windowId
+        ? enforcement.lastActivatedTarget
+        : firstAvailableTarget(allowedWindowIds, enforcement.availableTargets);
+    const next = {
+      ...enforcement,
+      allowedWindowIds,
+      minimizedWindows: enforcement.minimizedWindows.filter(
+        (window) => window.windowId !== windowId,
+      ),
+      initiallyMinimizedWindowIds:
+        enforcement.initiallyMinimizedWindowIds.filter(
+          (candidate) => candidate !== windowId,
+        ),
+      lastActivatedTarget,
+    };
+    await this.save(next);
+    if (wasAllowed) {
+      this.platform.browserWindowTargetClosed(enforcement.profileId, windowId);
+    }
+    return next;
+  }
+
+  private async minimizeWindow(
+    enforcement: ChromeTargetEnforcement,
+    windowId: number,
+  ): Promise<ChromeTargetEnforcement> {
+    if (enforcement.initiallyMinimizedWindowIds.includes(windowId)) {
+      await this.platform.minimizeWindow(windowId);
+      return enforcement;
+    }
+    if (enforcement.minimizedWindows.some(
+      (window) => window.windowId === windowId,
+    )) {
+      return enforcement;
+    }
+    const previousState = await this.platform.captureWindowState(windowId);
+    if (previousState === null) {
+      return enforcement;
+    }
+    const next = {
+      ...enforcement,
+      minimizedWindows: [
+        ...enforcement.minimizedWindows,
+        { windowId, previousState },
+      ],
+    };
+    await this.save(next);
+    await this.platform.minimizeWindow(windowId);
+    return next;
+  }
+
+  private async attemptRestoration(
+    enforcement: StoredChromeTargetState,
+  ): Promise<boolean> {
+    const unresolvedRestorations = [];
+    for (const window of enforcement.minimizedWindows) {
+      try {
+        await this.platform.restoreWindow(
+          window.windowId,
+          window.previousState,
+        );
+      } catch {
+        unresolvedRestorations.push(window);
+      }
+    }
+    const unresolvedInitiallyMinimizedWindowIds = [];
+    for (const windowId of enforcement.initiallyMinimizedWindowIds) {
+      try {
+        await this.platform.minimizeWindow(windowId);
+      } catch {
+        unresolvedInitiallyMinimizedWindowIds.push(windowId);
+      }
+    }
+    if (
+      unresolvedRestorations.length === 0 &&
+      unresolvedInitiallyMinimizedWindowIds.length === 0
+    ) {
+      await this.clear();
+      return true;
+    }
+    await this.save({
+      state: "restorationPending",
+      profileId: enforcement.profileId,
+      initiallyMinimizedWindowIds: unresolvedInitiallyMinimizedWindowIds,
+      minimizedWindows: unresolvedRestorations,
+    });
+    this.platform.restorationFailed(
+      enforcement.profileId,
+      [
+        ...unresolvedRestorations.map((window) => window.windowId),
+        ...unresolvedInitiallyMinimizedWindowIds,
+      ],
+    );
+    return false;
   }
 
   private async restoreTargetOrRemove(
-    enforcement: TabActivationEnforcement,
+    enforcement: ChromeTargetEnforcement,
     target: AvailableTabTarget,
     restoreUrl: string,
   ): Promise<boolean> {
@@ -548,47 +787,98 @@ export class ChromeTabEnforcementCoordinator {
     this.pendingOpenedTabs.clear();
   }
 
-  private serialized(operation: () => Promise<void>): Promise<void> {
+  private serialized<Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> {
     const result = this.operationTail.then(operation);
-    this.operationTail = result.catch(() => {});
+    this.operationTail = result.then(
+      () => {},
+      () => {},
+    );
     return result;
   }
 
-  private load(): Promise<TabActivationEnforcement | null> {
+  private load(): Promise<StoredChromeTargetState | null> {
     return this.store === undefined
-      ? loadTabActivationEnforcement()
-      : loadTabActivationEnforcement(this.store);
+      ? loadStoredChromeTargetState()
+      : loadStoredChromeTargetState(this.store);
   }
 
-  private save(enforcement: TabActivationEnforcement): Promise<void> {
+  private save(enforcement: StoredChromeTargetState): Promise<void> {
     return this.store === undefined
-      ? saveTabActivationEnforcement(enforcement)
-      : saveTabActivationEnforcement(enforcement, this.store);
+      ? saveStoredChromeTargetState(enforcement)
+      : saveStoredChromeTargetState(enforcement, this.store);
   }
 
   private clear(): Promise<void> {
     return this.store === undefined
-      ? clearTabActivationEnforcement()
-      : clearTabActivationEnforcement(this.store);
+      ? clearStoredChromeTargetState()
+      : clearStoredChromeTargetState(this.store);
   }
 }
 
 function findTarget(
-  enforcement: TabActivationEnforcement,
+  enforcement: ChromeTargetEnforcement,
   tabId: number,
 ): AvailableTabTarget | undefined {
   return enforcement.availableTargets.find((target) => target.tabId === tabId);
 }
 
+function findNavigationScopedTarget(
+  enforcement: ChromeTargetEnforcement,
+  tabId: number,
+): AvailableTabTarget | undefined {
+  const target = findTarget(enforcement, tabId);
+  return target !== undefined &&
+      !enforcement.allowedWindowIds.includes(target.windowId)
+    ? target
+    : undefined;
+}
+
+function isWindowCovered(
+  enforcement: ChromeTargetEnforcement,
+  windowId: number,
+): boolean {
+  return enforcement.allowedWindowIds.includes(windowId) ||
+    enforcement.availableTargets.some((target) => target.windowId === windowId);
+}
+
 function replacingTarget(
-  enforcement: TabActivationEnforcement,
+  enforcement: ChromeTargetEnforcement,
   existing: AvailableTabTarget,
   replacement: AvailableTabTarget,
-): TabActivationEnforcement {
+): ChromeTargetEnforcement {
   return {
     ...enforcement,
     availableTargets: enforcement.availableTargets.map((target) =>
       target === existing ? replacement : target,
     ),
   };
+}
+
+function firstAvailableTarget(
+  allowedWindowIds: number[],
+  availableTargets: AvailableTabTarget[],
+): ChromeTargetReference | null {
+  const windowId = allowedWindowIds[0];
+  if (windowId !== undefined) {
+    return { type: "window", windowId };
+  }
+  const tabId = availableTargets[0]?.tabId;
+  return tabId === undefined ? null : { type: "tab", tabId };
+}
+
+function sameTargetReference(
+  lhs: ChromeTargetReference | null,
+  rhs: ChromeTargetReference | null,
+): boolean {
+  if (lhs === null || rhs === null) {
+    return lhs === rhs;
+  }
+  if (lhs.type !== rhs.type) {
+    return false;
+  }
+  return lhs.type === "window"
+    ? lhs.windowId === (rhs as { type: "window"; windowId: number }).windowId
+    : lhs.tabId === (rhs as { type: "tab"; tabId: number }).tabId;
 }

@@ -70,6 +70,10 @@ public struct WindowTarget: Codable, Equatable, Hashable, Identifiable, Sendable
 public enum TargetIdentifier: Codable, Equatable, Hashable, Sendable {
     case application(bundleIdentifier: String)
     case window(WindowIdentifier)
+    case browserWindow(
+        profileIdentifier: BrowserProfileIdentifier,
+        windowIdentifier: BrowserWindowIdentifier
+    )
     case browserTab(
         profileIdentifier: BrowserProfileIdentifier,
         tabIdentifier: BrowserTabIdentifier
@@ -79,6 +83,7 @@ public enum TargetIdentifier: Codable, Equatable, Hashable, Sendable {
 public enum SessionTarget: Codable, Equatable, Hashable, Sendable {
     case application(ApplicationTarget)
     case window(WindowTarget)
+    case browserWindow(BrowserWindowTarget)
     case browserTab(BrowserTabTarget)
 
     public var id: TargetIdentifier {
@@ -87,6 +92,8 @@ public enum SessionTarget: Codable, Equatable, Hashable, Sendable {
             .application(bundleIdentifier: application.bundleIdentifier)
         case let .window(window):
             .window(window.id)
+        case let .browserWindow(window):
+            window.targetIdentifier
         case let .browserTab(tab):
             .browserTab(
                 profileIdentifier: tab.profileIdentifier,
@@ -100,6 +107,8 @@ public enum SessionTarget: Codable, Equatable, Hashable, Sendable {
         case let .application(application):
             application.bundleIdentifier
         case let .window(window):
+            window.application.bundleIdentifier
+        case let .browserWindow(window):
             window.application.bundleIdentifier
         case let .browserTab(tab):
             tab.application.bundleIdentifier
@@ -136,8 +145,12 @@ public struct TargetSelectionPolicy: Equatable, Sendable {
                 switch $0 {
                 case let .application(application):
                     application.bundleIdentifier == window.application.bundleIdentifier
+                case let .browserWindow(browserWindow):
+                    browserWindow.application.bundleIdentifier
+                        == window.application.bundleIdentifier
                 case let .browserTab(tab):
-                    tab.application.bundleIdentifier == window.application.bundleIdentifier
+                    tab.application.bundleIdentifier
+                        == window.application.bundleIdentifier
                 case .window:
                     false
                 }
@@ -152,10 +165,72 @@ public struct TargetSelectionPolicy: Equatable, Sendable {
             }
             return true
 
+        case let .browserWindow(window):
+            guard !targets.contains(where: {
+                guard case let .application(application) = $0 else {
+                    return false
+                }
+                return application.bundleIdentifier
+                    == window.application.bundleIdentifier
+            }) else {
+                return false
+            }
+
+            if let index = targets.firstIndex(where: { $0.id == target.id }) {
+                targets[index] = target
+                return true
+            }
+            let insertionIndex = targets.firstIndex { existing in
+                guard case let .browserTab(tab) = existing else {
+                    return false
+                }
+                return tab.profileIdentifier == window.profileIdentifier
+                    && tab.windowIdentifier == window.windowIdentifier
+            }
+                ?? targets.lastIndex {
+                    $0.bundleIdentifier == window.application.bundleIdentifier
+                }.map { targets.index(after: $0) }
+                ?? targets.endIndex
+            targets.removeAll { existing in
+                guard existing.bundleIdentifier
+                    == window.application.bundleIdentifier
+                else {
+                    return false
+                }
+                switch existing {
+                case .window:
+                    return true
+                case let .browserTab(tab):
+                    return tab.profileIdentifier == window.profileIdentifier
+                        && tab.windowIdentifier == window.windowIdentifier
+                case .application, .browserWindow:
+                    return false
+                }
+            }
+            targets.insert(
+                target,
+                at: min(insertionIndex, targets.endIndex)
+            )
+            return true
+
         case let .browserTab(tab):
             if let index = targets.firstIndex(where: { $0.id == target.id }) {
                 targets[index] = target
                 return true
+            }
+            guard !targets.contains(where: { existing in
+                switch existing {
+                case let .application(application):
+                    return application.bundleIdentifier
+                        == tab.application.bundleIdentifier
+                case let .browserWindow(window):
+                    return window.profileIdentifier == tab.profileIdentifier
+                        && window.windowIdentifier == tab.windowIdentifier
+                case .window, .browserTab:
+                    return false
+                }
+            }) else {
+                return false
             }
             let broadInsertionIndex = targets.firstIndex {
                 $0.bundleIdentifier == tab.application.bundleIdentifier
@@ -167,6 +242,9 @@ public struct TargetSelectionPolicy: Equatable, Sendable {
                     return false
                 }
                 if case .browserTab = $0 {
+                    return false
+                }
+                if case .browserWindow = $0 {
                     return false
                 }
                 return true
@@ -531,14 +609,14 @@ public final class SessionEngine {
     public init(
         clock: any SessionClock,
         enforcement: any SessionEnforcing,
-        tabActivationEnforcement: any TabActivationEnforcing = UnavailableTabActivationEnforcement(),
+        browserEnforcement: any BrowserEnforcing = UnavailableBrowserEnforcement(),
         recoveryStore: any SessionRecoveryPersisting = NoSessionRecoveryStore(),
         historyStore: any SessionHistoryStoring = NoSessionHistoryStore()
     ) {
         self.clock = clock
         self.enforcement = CoordinatedSessionEnforcement(
             applicationAndWindowEnforcement: enforcement,
-            tabActivationEnforcement: tabActivationEnforcement
+            browserEnforcement: browserEnforcement
         )
         self.recoveryStore = recoveryStore
         self.historyStore = historyStore

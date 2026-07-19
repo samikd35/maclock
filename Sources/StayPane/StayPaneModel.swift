@@ -18,6 +18,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var browserTabsByApplicationID: [
         String: [BrowserTabTarget]
     ] = [:]
+    @Published private(set) var browserWindowsByApplicationID: [
+        String: [BrowserWindowTarget]
+    ] = [:]
     @Published private(set) var nativeBridgeConnected = false
     @Published private(set) var nativeHostRegistered = false
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
@@ -71,16 +74,16 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         diagnosticLog = DiagnosticLog()
         let createdNativeBridge = try? NativeBridgeController()
         nativeBridge = createdNativeBridge
-        let tabActivationEnforcement: any TabActivationEnforcing
+        let browserEnforcement: any BrowserEnforcing
         if let createdNativeBridge {
-            tabActivationEnforcement = createdNativeBridge
+            browserEnforcement = createdNativeBridge
         } else {
-            tabActivationEnforcement = UnavailableTabActivationEnforcement()
+            browserEnforcement = UnavailableBrowserEnforcement()
         }
         engine = SessionEngine(
             clock: SystemSessionClock(),
             enforcement: enforcement,
-            tabActivationEnforcement: tabActivationEnforcement,
+            browserEnforcement: browserEnforcement,
             recoveryStore: sessionRecoveryStore,
             historyStore: historyStore
         )
@@ -125,12 +128,17 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         nativeBridge?.onBlockedNavigation = { [weak self] in
             self?.recordDiagnostic(.blockedTarget)
             self?.showNotice(
-                "StayPane returned the selected Chrome Tab Target to its Navigation Scope."
+                "StayPane returned the selected Tab Target to its Navigation Scope."
             )
         }
         nativeBridge?.onTabTargetClosed = { [weak self] _ in
             self?.showNotice(
                 "A selected Chrome tab was closed. The Session is still running with its remaining targets."
+            )
+        }
+        nativeBridge?.onBrowserWindowTargetClosed = { [weak self] _ in
+            self?.showNotice(
+                "A selected Chrome window was closed. The Session is still running with its remaining targets."
             )
         }
 
@@ -142,7 +150,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 engine.beginConfiguration(duration: initialDuration)
                 startupNotice = nil
             case .awaitingEnforcement:
-                startupNotice = "StayPane is verifying the Chrome Tab Target before resuming the saved Session."
+                startupNotice = "StayPane is verifying the Tab Target before resuming the saved Session."
             case .resumed:
                 recordDiagnostic(.recoveryResumed)
                 startupNotice = "StayPane resumed the unfinished Session from its Fixed End Time."
@@ -235,12 +243,25 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         })
     }
 
+    var selectedBrowserWindowIDs: Set<TargetIdentifier> {
+        Set(selectedTargetIDs.filter { identifier in
+            if case .browserWindow = identifier {
+                return true
+            }
+            return false
+        })
+    }
+
     var selectedBrowserApplicationIDs: Set<String> {
         Set(configuredTargets.compactMap { target in
-            guard case let .browserTab(tab) = target else {
+            switch target {
+            case let .browserWindow(window):
+                return window.application.bundleIdentifier
+            case let .browserTab(tab):
+                return tab.application.bundleIdentifier
+            case .application, .window:
                 return nil
             }
-            return tab.application.bundleIdentifier
         })
     }
 
@@ -261,7 +282,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                     $0.id == target.bundleIdentifier
                 })?.isAvailable == true
             }
-            && (selectedBrowserTabIDs.isEmpty || nativeBridgeConnected)
+            && (selectedBrowserWindowIDs.isEmpty
+                && selectedBrowserTabIDs.isEmpty || nativeBridgeConnected)
             && SessionDuration(seconds: durationSeconds) != nil
     }
 
@@ -398,6 +420,33 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         browserTabsByApplicationID[applicationID] ?? []
     }
 
+    func browserWindows(
+        for applicationID: String
+    ) -> [BrowserWindowTarget] {
+        browserWindowsByApplicationID[applicationID] ?? []
+    }
+
+    func setBrowserWindow(
+        id: TargetIdentifier,
+        isSelected: Bool
+    ) {
+        guard case .browserWindow = id else {
+            return
+        }
+        if isSelected {
+            guard let window = browserWindowsByApplicationID.values
+                .joined()
+                .first(where: { $0.targetIdentifier == id })
+            else {
+                return
+            }
+            engine.select(target: .browserWindow(window))
+        } else {
+            engine.deselectTarget(id)
+        }
+        synchronizeWithEngine()
+    }
+
     func setBrowserTab(
         id: TargetIdentifier,
         isSelected: Bool
@@ -527,6 +576,52 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         outlineController.show(around: frame)
     }
 
+    func highlightBrowserWindow(
+        _ browserWindow: BrowserWindowTarget,
+        isHighlighted: Bool
+    ) {
+        guard isHighlighted else {
+            outlineController.hide()
+            return
+        }
+        guard let browserFrame = browserWindow.frame else {
+            outlineController.hide()
+            return
+        }
+        let applicationID = browserWindow.application.bundleIdentifier
+        refreshWindows(for: applicationID)
+        let expectedFrame = CGRect(
+            x: CGFloat(browserFrame.x),
+            y: CGFloat(browserFrame.y),
+            width: CGFloat(browserFrame.width),
+            height: CGFloat(browserFrame.height)
+        )
+        let matchingWindows = windows(for: applicationID).filter { window in
+            guard let frame = windowCatalog.frame(for: window.id) else {
+                return false
+            }
+            return Self.framesApproximatelyEqual(frame, expectedFrame)
+        }
+        guard matchingWindows.count == 1,
+              let window = matchingWindows.first
+        else {
+            outlineController.hide()
+            return
+        }
+        highlightWindow(id: window.id, isHighlighted: true)
+    }
+
+    private static func framesApproximatelyEqual(
+        _ lhs: CGRect,
+        _ rhs: CGRect,
+        tolerance: CGFloat = 2
+    ) -> Bool {
+        abs(lhs.minX - rhs.minX) <= tolerance
+            && abs(lhs.minY - rhs.minY) <= tolerance
+            && abs(lhs.width - rhs.width) <= tolerance
+            && abs(lhs.height - rhs.height) <= tolerance
+    }
+
     func refreshWindows(for applicationID: String) {
         guard
             let application = applications.first(where: { $0.id == applicationID }),
@@ -638,14 +733,17 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             return
         }
         do {
-            try nativeBridge?.preflight(
-                targets: configuredTargets.compactMap { target in
-                    guard case let .browserTab(tab) = target else {
-                        return nil
-                    }
-                    return tab
+            try nativeBridge?.preflight(targets: configuredTargets.compactMap {
+                target -> BrowserEnforcementTarget? in
+                switch target {
+                case let .browserWindow(window):
+                    return .window(window)
+                case let .browserTab(tab):
+                    return .tab(tab)
+                case .application, .window:
+                    return nil
                 }
-            )
+            })
         } catch {
             showNotice(error.localizedDescription)
             return
@@ -1022,23 +1120,46 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private func synchronizeBrowserPresentation() {
         nativeBridgeConnected = nativeBridge?.isConnected == true
-        var refreshed: [String: [BrowserTabTarget]] = [:]
+        var refreshedTabs: [String: [BrowserTabTarget]] = [:]
+        var refreshedWindows: [String: [BrowserWindowTarget]] = [:]
         for application in applications
             where isChromeApplication(application.id) {
-            refreshed[application.id] = nativeBridge?.targets(
+            refreshedTabs[application.id] = nativeBridge?.tabTargets(
+                for: application.target
+            ) ?? []
+            refreshedWindows[application.id] = nativeBridge?.windowTargets(
                 for: application.target
             ) ?? []
         }
-        browserTabsByApplicationID = refreshed
+        browserTabsByApplicationID = refreshedTabs
+        browserWindowsByApplicationID = refreshedWindows
 
         switch engine.state {
         case .configuring, .ready:
+            let liveWindows = Array(refreshedWindows.values.joined())
+            var didChangeSelection = false
+            for target in configuredTargets {
+                guard case let .browserWindow(selected) = target else {
+                    continue
+                }
+                if let live = liveWindows.first(where: {
+                    $0.targetIdentifier == selected.targetIdentifier
+                }) {
+                    if live != selected {
+                        engine.select(target: .browserWindow(live))
+                        didChangeSelection = true
+                    }
+                } else {
+                    engine.deselectTarget(selected.targetIdentifier)
+                    didChangeSelection = true
+                }
+            }
             let replacements = configuredTargets.compactMap {
                 target -> BrowserTabTarget? in
                 guard case let .browserTab(selected) = target else {
                     return nil
                 }
-                guard let live = refreshed.values.joined().first(where: {
+                guard let live = refreshedTabs.values.joined().first(where: {
                     $0.targetIdentifier == selected.targetIdentifier
                 }) else {
                     return nil
@@ -1057,7 +1178,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             for replacement in replacements {
                 engine.select(target: .browserTab(replacement))
             }
-            if !replacements.isEmpty {
+            if didChangeSelection || !replacements.isEmpty {
                 synchronizeWithEngine()
             }
         default:
