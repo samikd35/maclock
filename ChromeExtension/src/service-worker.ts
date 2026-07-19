@@ -14,12 +14,17 @@ import {
 import { isValidProfileIdentifier } from "./identifiers.js";
 import { NativeCommandQueue } from "./native-command-queue.js";
 import {
+  closeTabIfPresent,
+  isMissingChromeTabError,
+} from "./chrome-tab-effects.js";
+import {
   TabActivationEnforcement,
   loadTabActivationEnforcement,
 } from "./tab-activation-store.js";
 import { decideTabActivation } from "./tab-policy.js";
 import {
-  createCurrentWebsiteScope,
+  canStartCurrentWebsiteEnforcement,
+  createStartingCurrentWebsiteScope,
   isWithinCurrentWebsite,
 } from "./navigation-policy.js";
 import {
@@ -30,12 +35,14 @@ import { collectTabSnapshots } from "./tab-snapshot.js";
 
 const PROFILE_STORAGE_KEY = "stayPaneProfileIdentifier";
 const FEEDBACK_INTERVAL_MS = 2_000;
+const OPENED_TAB_GRACE_MS = 2_000;
 
 let nativePort: chrome.runtime.Port | null = null;
 let connectedProfileIdentifier: string | null = null;
 let reconnectTimer: number | null = null;
 let snapshotTimer: number | null = null;
 let lastFeedbackAt: number | null = null;
+const openedTabGraceTimers = new Map<number, number>();
 
 const navigationEnforcer = new CurrentWebsiteNavigationEnforcer({
   platform: {
@@ -43,7 +50,20 @@ const navigationEnforcer = new CurrentWebsiteNavigationEnforcer({
       await chrome.tabs.update(tabId, { url });
     },
     async closeTab(tabId) {
-      await chrome.tabs.remove(tabId);
+      await closeTabIfPresent(tabId, {
+        removeTab: async (candidateTabId) => chrome.tabs.remove(candidateTabId),
+        tabExists: async (candidateTabId) => {
+          try {
+            await chrome.tabs.get(candidateTabId);
+            return true;
+          } catch (error) {
+            if (isMissingChromeTabError(error)) {
+              return false;
+            }
+            throw error;
+          }
+        },
+      });
     },
     blockedNavigation(profileId, tabId) {
       showBlockedNavigationFeedback();
@@ -72,14 +92,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       url: changeInfo.url,
     });
   }
-  if (
-    tab.openerTabId !== undefined &&
-    (changeInfo.url !== undefined || changeInfo.status !== undefined)
-  ) {
-    void handleOpenedTab(tab);
+  if (changeInfo.url !== undefined || changeInfo.status !== undefined) {
+    void handleOpenedTab(tab, changeInfo.url);
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  cancelOpenedTabGracePeriod(tabId);
   void handleRemovedTab(tabId);
   scheduleSnapshot();
 });
@@ -106,6 +124,14 @@ chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
   void handleNavigationEvent(
     makeDocumentNavigationEvent("historyUpdated", details),
   );
+});
+chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
+  void handleOpenedTabObservation({
+    tabId: details.tabId,
+    sourceTabId: details.sourceTabId,
+    pendingUrl: details.url,
+    url: undefined,
+  });
 });
 
 void ensureNativeConnection();
@@ -221,15 +247,16 @@ async function beginEnforcement(
   }
 
   try {
-    const navigationScope = createCurrentWebsiteScope(
-      command.navigationScope.initialUrl,
-    );
-    if (
-      tab.url !== undefined &&
-      isWithinCurrentWebsite(navigationScope, tab.url)
-    ) {
-      navigationScope.lastAllowedUrl = new URL(tab.url).href;
+    const startingScope = {
+      initialUrl: command.navigationScope.initialUrl,
+      liveUrl: tab.url,
+      liveDocumentIsComplete: tab.status === "complete",
+    };
+    if (!canStartCurrentWebsiteEnforcement(startingScope)) {
+      sendEnforcementError(command.profileId, "targetNotReady");
+      return;
     }
+    const navigationScope = createStartingCurrentWebsiteScope(startingScope);
     const enforcement: TabActivationEnforcement = {
       profileId: command.profileId,
       tabId: command.tabId,
@@ -274,18 +301,67 @@ function makeDocumentNavigationEvent(
   };
 }
 
-async function handleOpenedTab(tab: chrome.tabs.Tab): Promise<void> {
+async function handleOpenedTab(
+  tab: chrome.tabs.Tab,
+  observedUrl?: string,
+): Promise<void> {
   if (tab.id === undefined) {
     return;
   }
-  await handleNavigationEvent({
-    type: "openedTab",
+  await handleOpenedTabObservation({
     tabId: tab.id,
-    openerTabId: tab.openerTabId,
-    pendingUrl: tab.pendingUrl,
+    sourceTabId: tab.openerTabId,
+    pendingUrl: observedUrl ?? tab.pendingUrl,
     url: tab.url,
-    isComplete: tab.status === "complete",
   });
+}
+
+async function handleOpenedTabObservation(
+  observation: Omit<
+    Extract<NavigationEnforcementEvent, { type: "openedTab" }>,
+    "type"
+  >,
+): Promise<void> {
+  const candidateUrl = observation.pendingUrl ?? observation.url;
+  if (
+    candidateUrl === undefined ||
+    candidateUrl === "" ||
+    candidateUrl === "about:blank"
+  ) {
+    scheduleOpenedTabGracePeriod(observation.tabId);
+  } else {
+    cancelOpenedTabGracePeriod(observation.tabId);
+  }
+  await handleNavigationEvent({ type: "openedTab", ...observation });
+}
+
+function scheduleOpenedTabGracePeriod(tabId: number): void {
+  cancelOpenedTabGracePeriod(tabId);
+  openedTabGraceTimers.set(
+    tabId,
+    setTimeout(() => {
+      openedTabGraceTimers.delete(tabId);
+      void handleNavigationEvent({
+        type: "openedTabGraceExpired",
+        tabId,
+      });
+    }, OPENED_TAB_GRACE_MS),
+  );
+}
+
+function cancelOpenedTabGracePeriod(tabId: number): void {
+  const timer = openedTabGraceTimers.get(tabId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    openedTabGraceTimers.delete(tabId);
+  }
+}
+
+function clearOpenedTabGracePeriods(): void {
+  for (const timer of openedTabGraceTimers.values()) {
+    clearTimeout(timer);
+  }
+  openedTabGraceTimers.clear();
 }
 
 async function handleNavigationEvent(
@@ -294,10 +370,41 @@ async function handleNavigationEvent(
   try {
     await navigationEnforcer.handle(event);
   } catch {
-    const enforcement = await loadTabActivationEnforcement();
-    await stopTabActivationEnforcement();
-    if (enforcement !== null) {
-      sendEnforcementError(enforcement.profileId, "activationFailed");
+    await failOpenAfterNavigationFailure();
+  }
+}
+
+async function failOpenAfterNavigationFailure(): Promise<void> {
+  const failedPort = nativePort;
+  const failedProfileIdentifier = connectedProfileIdentifier;
+  try {
+    try {
+      clearOpenedTabGracePeriods();
+      lastFeedbackAt = null;
+      await navigationEnforcer.stop();
+      await chrome.action.setBadgeText({ text: "" });
+      await chrome.action.setTitle({ title: "StayPane Chrome Companion" });
+    } catch {
+      // The bridge disconnect below is the authoritative Fail Open signal.
+    }
+    if (failedPort !== null && failedProfileIdentifier !== null) {
+      try {
+        failedPort.postMessage(
+          makeEnforcementError(failedProfileIdentifier, "activationFailed"),
+        );
+      } catch {
+        // Disconnect still reports enforcement loss to StayPane.
+      }
+    }
+  } finally {
+    if (nativePort === failedPort) {
+      nativePort = null;
+      connectedProfileIdentifier = null;
+    }
+    try {
+      failedPort?.disconnect();
+    } finally {
+      scheduleReconnect();
     }
   }
 }
@@ -414,6 +521,7 @@ async function loadProfileIdentifier(): Promise<string> {
 
 async function stopTabActivationEnforcement(): Promise<void> {
   lastFeedbackAt = null;
+  clearOpenedTabGracePeriods();
   await navigationEnforcer.stop();
   await chrome.action.setBadgeText({ text: "" });
   await chrome.action.setTitle({ title: "StayPane Chrome Companion" });
@@ -421,7 +529,11 @@ async function stopTabActivationEnforcement(): Promise<void> {
 
 function sendEnforcementError(
   profileIdentifier: string,
-  code: "targetMissing" | "activationFailed" | "invalidCommand",
+  code:
+    | "targetMissing"
+    | "targetNotReady"
+    | "activationFailed"
+    | "invalidCommand",
 ): void {
   nativePort?.postMessage(makeEnforcementError(profileIdentifier, code));
 }

@@ -22,7 +22,11 @@ extension NativeBridgeError: LocalizedError {
         case .startConfirmationTimedOut:
             "The Chrome extension did not confirm Tab Activation Enforcement in time."
         case let .extensionReported(code):
-            "Chrome could not enforce the selected tab (\(code.rawValue))."
+            if code == .targetNotReady {
+                "Wait for the selected Chrome tab to finish loading, then start the Session again."
+            } else {
+                "Chrome could not enforce the selected tab (\(code.rawValue))."
+            }
         }
     }
 }
@@ -184,9 +188,7 @@ final class NativeBridgeController: TabActivationEnforcing {
                 profileIdentifier: profileIdentifier.rawValue,
                 tabIdentifier: target.tabIdentifier.rawValue,
                 windowIdentifier: target.windowIdentifier.rawValue,
-                navigationScope: .currentWebsite(
-                    initialURL: target.url.absoluteString
-                )
+                navigationScope: Self.bridgeNavigationScope(for: target)
             ),
             to: connection
         )
@@ -296,9 +298,7 @@ final class NativeBridgeController: TabActivationEnforcing {
                 reject(connection)
                 return true
             }
-            tabsByProfile[profile] = tabs.filter {
-                !$0.isIncognito && Self.eligibleWebURL(from: $0.url) != nil
-            }
+            tabsByProfile[profile] = tabs.filter { !$0.isIncognito }
             return true
 
         case let .tabActivated(profileIdentifier, _, _):
@@ -389,9 +389,13 @@ final class NativeBridgeController: TabActivationEnforcing {
         guard connectionByProfile[profileIdentifier] != nil else {
             throw NativeBridgeError.disconnected
         }
+        guard Self.eligibleWebURL(
+            from: target.url.absoluteString
+        ) != nil else {
+            throw NativeBridgeError.targetMissing
+        }
         guard tabsByProfile[profileIdentifier]?.contains(where: {
             !$0.isIncognito
-                && Self.eligibleWebURL(from: $0.url) != nil
                 && $0.tabIdentifier == target.tabIdentifier.rawValue
                 && $0.windowIdentifier == target.windowIdentifier.rawValue
         }) == true else {
@@ -408,6 +412,15 @@ final class NativeBridgeController: TabActivationEnforcing {
             return nil
         }
         return url
+    }
+
+    private static func bridgeNavigationScope(
+        for target: BrowserTabTarget
+    ) -> BridgeNavigationScope {
+        switch target.navigationScope {
+        case .currentWebsite:
+            .currentWebsite(initialURL: target.url.absoluteString)
+        }
     }
 
     @discardableResult

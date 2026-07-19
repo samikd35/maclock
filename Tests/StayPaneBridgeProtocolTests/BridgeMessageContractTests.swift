@@ -87,6 +87,18 @@ import Testing
     #expect(!String(decoding: encoded, as: UTF8.self).contains("https"))
 }
 
+@Test func loadingTabFailureRoundTripsWithoutBrowsingContent() throws {
+    let message = BridgeMessage.enforcementError(
+        profileIdentifier: "profile-one",
+        code: .targetNotReady
+    )
+
+    let encoded = try BridgeMessageCodec.encode(message)
+
+    #expect(try BridgeMessageCodec.decode(encoded) == message)
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("http"))
+}
+
 @Test(arguments: [
     #"{"version":1,"type":"hello","extensionId":"hoofhoedlagpoclhkgnkmejaihaapoke","profileId":"profile-one"}"#,
     #"{"version":2,"type":"hello","extensionId":"wrong","profileId":"profile-one"}"#,

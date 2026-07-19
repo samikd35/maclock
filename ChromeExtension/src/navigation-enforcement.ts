@@ -36,10 +36,13 @@ export type NavigationEnforcementEvent =
   | {
       type: "openedTab";
       tabId: number;
-      openerTabId: number | undefined;
+      sourceTabId: number | undefined;
       pendingUrl: string | undefined;
       url: string | undefined;
-      isComplete: boolean;
+    }
+  | {
+      type: "openedTabGraceExpired";
+      tabId: number;
     };
 
 export type CurrentWebsiteNavigationEnforcerOptions = {
@@ -53,6 +56,7 @@ export class CurrentWebsiteNavigationEnforcer {
   private operationTail: Promise<void> = Promise.resolve();
   private lastFeedbackAt: number | null = null;
   private readonly handledOpenedTabs = new Set<number>();
+  private readonly pendingOpenedTabs = new Set<number>();
   private readonly platform: NavigationEnforcementPlatform;
   private readonly store: TabActivationStorePort | undefined;
   private readonly now: () => number;
@@ -69,6 +73,7 @@ export class CurrentWebsiteNavigationEnforcer {
     return this.serialized(async () => {
       this.lastFeedbackAt = null;
       this.handledOpenedTabs.clear();
+      this.pendingOpenedTabs.clear();
       await this.save(enforcement);
     });
   }
@@ -77,6 +82,7 @@ export class CurrentWebsiteNavigationEnforcer {
     return this.serialized(async () => {
       this.lastFeedbackAt = null;
       this.handledOpenedTabs.clear();
+      this.pendingOpenedTabs.clear();
       await this.clear();
     });
   }
@@ -102,6 +108,9 @@ export class CurrentWebsiteNavigationEnforcer {
           return;
         case "openedTab":
           await this.handleOpenedTab(enforcement, event);
+          return;
+        case "openedTabGraceExpired":
+          await this.handleOpenedTabGraceExpired(enforcement, event.tabId);
           return;
       }
     });
@@ -184,6 +193,9 @@ export class CurrentWebsiteNavigationEnforcer {
     if (event.frameId !== 0 || event.tabId !== enforcement.tabId) {
       return;
     }
+    const wasPendingDocument =
+      enforcement.navigationScope.pendingNavigation?.documentId ===
+      event.documentId;
     const decision = decideCommittedNavigation({
       scope: enforcement.navigationScope,
       candidateUrl: event.url,
@@ -202,6 +214,13 @@ export class CurrentWebsiteNavigationEnforcer {
       this.publishBlockedNoticeIfNeeded(enforcement, decision.shouldNotify);
       return;
     }
+    if (wasPendingDocument) {
+      await this.save({
+        ...enforcement,
+        navigationScope: decision.nextScope,
+      });
+      return;
+    }
     const completedScope = completeCurrentWebsiteNavigation(
       decision.nextScope,
       event.documentId,
@@ -215,7 +234,8 @@ export class CurrentWebsiteNavigationEnforcer {
     event: Extract<NavigationEnforcementEvent, { type: "openedTab" }>,
   ): Promise<void> {
     if (
-      event.openerTabId !== enforcement.tabId ||
+      (event.sourceTabId !== enforcement.tabId &&
+        !this.pendingOpenedTabs.has(event.tabId)) ||
       this.handledOpenedTabs.has(event.tabId)
     ) {
       return;
@@ -223,14 +243,16 @@ export class CurrentWebsiteNavigationEnforcer {
     const decision = decideOpenedTab({
       scope: enforcement.navigationScope,
       candidateUrl: event.pendingUrl ?? event.url,
-      isComplete: event.isComplete,
+      hasGraceExpired: false,
       now: this.now(),
       lastFeedbackAt: this.lastFeedbackAt,
       feedbackIntervalMs: this.feedbackIntervalMs,
     });
     if (decision.kind === "wait") {
+      this.rememberPendingOpenedTab(event.tabId);
       return;
     }
+    this.pendingOpenedTabs.delete(event.tabId);
     if (decision.kind === "transfer") {
       await this.platform.navigateTab(
         enforcement.tabId,
@@ -244,6 +266,30 @@ export class CurrentWebsiteNavigationEnforcer {
     if (decision.kind === "close") {
       this.publishBlockedNoticeIfNeeded(enforcement, decision.shouldNotify);
     }
+  }
+
+  private async handleOpenedTabGraceExpired(
+    enforcement: TabActivationEnforcement,
+    tabId: number,
+  ): Promise<void> {
+    if (!this.pendingOpenedTabs.delete(tabId)) {
+      return;
+    }
+    const decision = decideOpenedTab({
+      scope: enforcement.navigationScope,
+      candidateUrl: undefined,
+      hasGraceExpired: true,
+      now: this.now(),
+      lastFeedbackAt: this.lastFeedbackAt,
+      feedbackIntervalMs: this.feedbackIntervalMs,
+    });
+    if (decision.kind !== "close") {
+      return;
+    }
+    this.lastFeedbackAt = decision.nextFeedbackAt;
+    await this.platform.closeTab(tabId);
+    this.rememberHandledOpenedTab(tabId);
+    this.publishBlockedNoticeIfNeeded(enforcement, decision.shouldNotify);
   }
 
   private publishBlockedNoticeIfNeeded(
@@ -264,6 +310,16 @@ export class CurrentWebsiteNavigationEnforcer {
       const oldest = this.handledOpenedTabs.values().next().value;
       if (oldest !== undefined) {
         this.handledOpenedTabs.delete(oldest);
+      }
+    }
+  }
+
+  private rememberPendingOpenedTab(tabId: number): void {
+    this.pendingOpenedTabs.add(tabId);
+    if (this.pendingOpenedTabs.size > 512) {
+      const oldest = this.pendingOpenedTabs.values().next().value;
+      if (oldest !== undefined) {
+        this.pendingOpenedTabs.delete(oldest);
       }
     }
   }

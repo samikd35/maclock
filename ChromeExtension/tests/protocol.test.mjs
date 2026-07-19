@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   fitTabsToNativeMessageBudget,
   makeBlockedNavigation,
+  makeEnforcementError,
   makeHello,
   makeTabActivationStarted,
   parseNativeMessage,
@@ -36,6 +37,15 @@ test("confirms Tab Activation Enforcement with exact target identity", () => {
     profileId: "profile_one",
     tabId: 41,
     windowId: 9,
+  });
+});
+
+test("reports a loading selected tab without browsing content", () => {
+  assert.deepEqual(makeEnforcementError("profile_one", "targetNotReady"), {
+    version: 2,
+    type: "enforcementError",
+    profileId: "profile_one",
+    code: "targetNotReady",
   });
 });
 

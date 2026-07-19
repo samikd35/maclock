@@ -97,6 +97,49 @@ test("a matching completed document becomes the Last Allowed Page", async () => 
   assert.deepEqual(harness.closedTabs, []);
 });
 
+test("history changes before completion remain pending", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "committed",
+    tabId: 41,
+    frameId: 0,
+    documentId: "loading-document",
+    url: "https://work.example/loading",
+  });
+  await harness.enforcer.handle({
+    type: "historyUpdated",
+    tabId: 41,
+    frameId: 0,
+    documentId: "loading-document",
+    url: "https://work.example/loading?state=changed",
+  });
+
+  const pending = await loadTabActivationEnforcement(harness.store);
+  assert.equal(
+    pending.navigationScope.lastAllowedUrl,
+    "https://work.example/project",
+  );
+  assert.deepEqual(pending.navigationScope.pendingNavigation, {
+    documentId: "loading-document",
+    url: "https://work.example/loading?state=changed",
+  });
+
+  await harness.enforcer.handle({
+    type: "completed",
+    tabId: 41,
+    frameId: 0,
+    documentId: "loading-document",
+    url: "https://work.example/loading?state=changed",
+  });
+  assert.equal(
+    (await loadTabActivationEnforcement(harness.store)).navigationScope
+      .lastAllowedUrl,
+    "https://work.example/loading?state=changed",
+  );
+});
+
 test("subframe navigation never changes or restores the top-level tab", async () => {
   const harness = makeHarness();
   await harness.enforcer.start(makeEnforcement());
@@ -124,18 +167,16 @@ test("opened links transfer or close without expanding the immutable tab", async
   await harness.enforcer.handle({
     type: "openedTab",
     tabId: 90,
-    openerTabId: 41,
+    sourceTabId: 41,
     pendingUrl: "https://work.example/continued",
     url: "about:blank",
-    isComplete: false,
   });
   await harness.enforcer.handle({
     type: "openedTab",
     tabId: 91,
-    openerTabId: 41,
+    sourceTabId: 41,
     pendingUrl: "https://video.example/watch",
     url: "about:blank",
-    isComplete: false,
   });
 
   assert.deepEqual(harness.navigations, [
@@ -146,6 +187,95 @@ test("opened links transfer or close without expanding the immutable tab", async
     (await loadTabActivationEnforcement(harness.store)).tabId,
     41,
   );
+});
+
+test("a navigation target source works without a retained tab opener", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 92,
+    sourceTabId: 41,
+    pendingUrl: "https://work.example/from-noopener",
+    url: undefined,
+  });
+
+  assert.deepEqual(harness.navigations, [
+    [41, "https://work.example/from-noopener"],
+  ]);
+  assert.deepEqual(harness.closedTabs, [92]);
+});
+
+test("a completed blank child waits for its first real destination", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 93,
+    sourceTabId: 41,
+    pendingUrl: "about:blank",
+    url: "about:blank",
+  });
+  assert.deepEqual(harness.closedTabs, []);
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 93,
+    sourceTabId: undefined,
+    pendingUrl: undefined,
+    url: "https://work.example/resolved",
+  });
+
+  assert.deepEqual(harness.navigations, [
+    [41, "https://work.example/resolved"],
+  ]);
+  assert.deepEqual(harness.closedTabs, [93]);
+});
+
+test("an unresolved blank child closes when its grace period expires", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 94,
+    sourceTabId: 41,
+    pendingUrl: "about:blank",
+    url: "about:blank",
+  });
+  await harness.enforcer.handle({
+    type: "openedTabGraceExpired",
+    tabId: 94,
+  });
+
+  assert.deepEqual(harness.closedTabs, [94]);
+  assert.deepEqual(harness.blockedNotices, [["profile_one", 41]]);
+});
+
+test("a completed blank child closes after resolving cross-scope", async () => {
+  const harness = makeHarness();
+  await harness.enforcer.start(makeEnforcement());
+
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 95,
+    sourceTabId: 41,
+    pendingUrl: "about:blank",
+    url: "about:blank",
+  });
+  await harness.enforcer.handle({
+    type: "openedTab",
+    tabId: 95,
+    sourceTabId: undefined,
+    pendingUrl: undefined,
+    url: "https://video.example/resolved",
+  });
+
+  assert.deepEqual(harness.navigations, []);
+  assert.deepEqual(harness.closedTabs, [95]);
+  assert.deepEqual(harness.blockedNotices, [["profile_one", 41]]);
 });
 
 test("stop remains final when a blocked navigation effect is in flight", async () => {

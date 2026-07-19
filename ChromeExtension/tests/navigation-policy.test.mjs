@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   completeCurrentWebsiteNavigation,
+  canStartCurrentWebsiteEnforcement,
   createCurrentWebsiteScope,
+  createStartingCurrentWebsiteScope,
   decideCommittedNavigation,
   decideOpenedTab,
   isWithinCurrentWebsite,
@@ -31,6 +33,47 @@ test("Current Website accepts only HTTP and HTTPS on the exact hostname", () => 
   ]) {
     assert.equal(isWithinCurrentWebsite(scope, candidate), false, candidate);
   }
+});
+
+test("start promotes only a fully completed live page", () => {
+  const loading = createStartingCurrentWebsiteScope({
+    initialUrl: "https://work.example/stable",
+    liveUrl: "https://work.example/loading",
+    liveDocumentIsComplete: false,
+  });
+  const complete = createStartingCurrentWebsiteScope({
+    initialUrl: "https://work.example/stable",
+    liveUrl: "https://work.example/complete",
+    liveDocumentIsComplete: true,
+  });
+  const completedCrossHost = createStartingCurrentWebsiteScope({
+    initialUrl: "https://work.example/stable",
+    liveUrl: "https://video.example/watch",
+    liveDocumentIsComplete: true,
+  });
+
+  assert.equal(loading.lastAllowedUrl, "https://work.example/stable");
+  assert.equal(complete.lastAllowedUrl, "https://work.example/complete");
+  assert.equal(
+    completedCrossHost.lastAllowedUrl,
+    "https://work.example/stable",
+  );
+  assert.equal(
+    canStartCurrentWebsiteEnforcement({
+      initialUrl: "https://work.example/stable",
+      liveUrl: "https://work.example/loading",
+      liveDocumentIsComplete: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canStartCurrentWebsiteEnforcement({
+      initialUrl: "https://work.example/stable",
+      liveUrl: "https://video.example/loading",
+      liveDocumentIsComplete: false,
+    }),
+    true,
+  );
 });
 
 test("a committed cross-host navigation restores the Last Allowed Page", () => {
@@ -127,7 +170,7 @@ test("same-scope links transfer into the original tab and cross-scope links clos
     decideOpenedTab({
       scope,
       candidateUrl: "https://work.example/continued?step=2",
-      isComplete: false,
+      hasGraceExpired: false,
       now: 10_000,
       lastFeedbackAt: null,
       feedbackIntervalMs: 2_000,
@@ -141,7 +184,7 @@ test("same-scope links transfer into the original tab and cross-scope links clos
     decideOpenedTab({
       scope,
       candidateUrl: "https://video.example/watch",
-      isComplete: false,
+      hasGraceExpired: false,
       now: 10_000,
       lastFeedbackAt: null,
       feedbackIntervalMs: 2_000,
@@ -156,7 +199,7 @@ test("same-scope links transfer into the original tab and cross-scope links clos
     decideOpenedTab({
       scope,
       candidateUrl: "about:blank",
-      isComplete: false,
+      hasGraceExpired: false,
       now: 10_000,
       lastFeedbackAt: null,
       feedbackIntervalMs: 2_000,

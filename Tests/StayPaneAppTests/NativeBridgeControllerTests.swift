@@ -83,6 +83,24 @@ import Testing
     #expect(target.title == "Swift Documentation")
     #expect(target.url.host == "www.swift.org")
 
+    try client.send(
+        .tabsSnapshot(
+            profileIdentifier: profileIdentifier,
+            tabs: [
+                BridgeTabSnapshot(
+                    tabIdentifier: 12,
+                    windowIdentifier: 4,
+                    title: "Temporarily outside the scope",
+                    url: "chrome://settings/",
+                    faviconDataURL: nil,
+                    isActive: true,
+                    isIncognito: false
+                )
+            ]
+        )
+    )
+    try controller.poll()
+    #expect(controller.targets(for: chrome).isEmpty)
     try controller.preflight(targets: [target])
     #expect(
         try controller.start(allowing: [target]) == .awaitingConfirmation

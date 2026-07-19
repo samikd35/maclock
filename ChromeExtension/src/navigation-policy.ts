@@ -40,7 +40,7 @@ export type CommittedNavigationDecision =
 export type OpenedTabInput = FeedbackInput & {
   scope: CurrentWebsiteScope;
   candidateUrl: string | undefined;
-  isComplete: boolean;
+  hasGraceExpired: boolean;
 };
 
 export type OpenedTabDecision =
@@ -52,6 +52,12 @@ export type OpenedTabDecision =
       nextFeedbackAt: number | null;
     };
 
+export type StartingCurrentWebsiteInput = {
+  initialUrl: string;
+  liveUrl: string | undefined;
+  liveDocumentIsComplete: boolean;
+};
+
 export function createCurrentWebsiteScope(
   initialUrl: string,
 ): CurrentWebsiteScope {
@@ -61,6 +67,35 @@ export function createCurrentWebsiteScope(
     hostname: normalizeHostname(parsed.hostname),
     lastAllowedUrl: parsed.href,
   };
+}
+
+export function createStartingCurrentWebsiteScope(
+  input: StartingCurrentWebsiteInput,
+): CurrentWebsiteScope {
+  const scope = createCurrentWebsiteScope(input.initialUrl);
+  if (
+    !input.liveDocumentIsComplete ||
+    input.liveUrl === undefined ||
+    !isWithinCurrentWebsite(scope, input.liveUrl)
+  ) {
+    return scope;
+  }
+  return {
+    ...scope,
+    lastAllowedUrl: requireWebURL(input.liveUrl).href,
+  };
+}
+
+export function canStartCurrentWebsiteEnforcement(
+  input: StartingCurrentWebsiteInput,
+): boolean {
+  if (input.liveDocumentIsComplete || input.liveUrl === undefined) {
+    return true;
+  }
+  return !isWithinCurrentWebsite(
+    createCurrentWebsiteScope(input.initialUrl),
+    input.liveUrl,
+  );
 }
 
 export function isWithinCurrentWebsite(
@@ -188,8 +223,8 @@ export function completeCurrentWebsiteNavigation(
 export function decideOpenedTab(input: OpenedTabInput): OpenedTabDecision {
   const candidate = input.candidateUrl;
   if (
-    !input.isComplete &&
-    (candidate === undefined || candidate === "" || candidate === "about:blank")
+    !input.hasGraceExpired &&
+    isUnresolvedOpenedTabURL(candidate)
   ) {
     return { kind: "wait" };
   }
@@ -208,6 +243,12 @@ export function decideOpenedTab(input: OpenedTabInput): OpenedTabDecision {
     shouldNotify: feedback.shouldNotify,
     nextFeedbackAt: feedback.nextFeedbackAt,
   };
+}
+
+function isUnresolvedOpenedTabURL(candidate: string | undefined): boolean {
+  return (
+    candidate === undefined || candidate === "" || candidate === "about:blank"
+  );
 }
 
 function decideFeedback(input: FeedbackInput): {

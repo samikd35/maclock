@@ -15,6 +15,7 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 2. Confirm the row says **Current Website** followed by the page's hostname, and the final review repeats that Navigation Scope.
 3. Confirm `chrome://`, `file://`, extension pages, and Incognito tabs are absent from the eligible Tab Target list.
 4. Start a short Session and confirm the selected Tab Target remains immutable.
+5. Try to start while that tab is still loading. StayPane must ask you to wait for the page to finish rather than treating an incomplete page as the Last Allowed Page.
 
 ## Allowed top-level navigation
 
@@ -34,7 +35,7 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 
 1. From the Tab Target, open a same-hostname link in a new tab. Its destination must move into the original Tab Target and the new tab must close.
 2. Return to a stable allowed page, then open a different-hostname link in a new tab. The new tab must close and the original Tab Target must remain unchanged.
-3. Repeat both cases from links that initially create `about:blank` before resolving. No new tab may become a Session Target or expand the immutable allowlist.
+3. Repeat both cases from links—including `noopener` links—that initially create `about:blank` before resolving. StayPane gives the blank child a brief bounded grace period to reveal its real destination; no new tab may become a Session Target or expand the immutable allowlist.
 4. Activate or create an unrelated tab directly. Ticket 08 Tab Activation Enforcement must still return Chrome to the selected Tab Target.
 
 ## End, Recovery, and Fail Open

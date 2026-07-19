@@ -168,7 +168,11 @@ export function makeTabActivationStarted(
 
 export function makeEnforcementError(
   profileId: string,
-  code: "targetMissing" | "activationFailed" | "invalidCommand",
+  code:
+    | "targetMissing"
+    | "targetNotReady"
+    | "activationFailed"
+    | "invalidCommand",
 ) {
   requireProfileIdentifier(profileId);
   return {

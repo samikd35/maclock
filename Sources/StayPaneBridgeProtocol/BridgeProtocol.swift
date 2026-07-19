@@ -53,6 +53,7 @@ public struct BridgeTabSnapshot: Equatable, Sendable {
 
 public enum BridgeEnforcementErrorCode: String, Equatable, Sendable {
     case targetMissing
+    case targetNotReady
     case activationFailed
     case invalidCommand
 }
