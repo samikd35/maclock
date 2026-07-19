@@ -6,6 +6,8 @@ struct StayPaneMenuView: View {
     @ObservedObject var model: StayPaneModel
     @ObservedObject var floatingTimerPreferences: FloatingTimerPreferenceModel
     @ObservedObject var launchAtLoginModel: LaunchAtLoginModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +31,7 @@ struct StayPaneMenuView: View {
         }
         .frame(width: 410, height: 620)
         .confirmationDialog(
-            "Clear all Session History?",
+            StayPaneAccessibilityText.clearHistoryConfirmation,
             isPresented: Binding(
                 get: { model.isConfirmingHistoryClear },
                 set: { isPresented in
@@ -40,14 +42,22 @@ struct StayPaneMenuView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Clear History", role: .destructive) {
+            Button(StayPaneAccessibilityText.clearHistoryAction, role: .destructive) {
                 model.confirmHistoryClear()
             }
             Button("Cancel", role: .cancel) {
                 model.cancelHistoryClear()
             }
         } message: {
-            Text("This permanently removes all retained local Session History records.")
+            Text(StayPaneAccessibilityText.clearHistoryWarning)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.statusPanelAccessibilityPresentation.title)
+        .accessibilityValue(
+            model.statusPanelAccessibilityPresentation.announcement
+        )
+        .onChange(of: model.statusPanelAccessibilityPresentation) { _, value in
+            AccessibilityAnnouncer.announce(value.announcement)
         }
     }
 
@@ -70,7 +80,9 @@ struct StayPaneMenuView: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.isReviewing {
+        if model.shouldPresentOnboarding {
+            OnboardingView(model: model)
+        } else if model.isReviewing {
             reviewView
         } else {
             switch model.state {
@@ -102,6 +114,7 @@ struct StayPaneMenuView: View {
                 .controlSize(.large)
             Text("Resuming Session")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("StayPane is verifying the saved Tab Target before restoring enforcement.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -130,6 +143,7 @@ struct StayPaneMenuView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Focus duration")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
 
                 HStack {
                     TextField("Seconds", value: $model.durationSeconds, format: .number)
@@ -175,6 +189,7 @@ struct StayPaneMenuView: View {
                 HStack {
                     Text("Allowed targets")
                         .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button {
                         model.refreshApplications()
@@ -220,16 +235,29 @@ struct StayPaneMenuView: View {
                     preciseBrowserTabNote
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(
+                StayPaneAccessibilityText.targetHierarchyRegion
+            )
 
             floatingTimerSetupCard
             launchAtLoginCard
             historyAndDiagnosticsCard
+
+            Button("Open Setup & Privacy Guide") {
+                model.showOnboarding()
+            }
+            .buttonStyle(.link)
+            .accessibilityHint(
+                "Reopens first-run guidance for Accessibility, privacy, and optional Chrome setup."
+            )
 
             Button("Review session") {
                 model.beginReview()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .disabled(!model.canReview)
         }
@@ -244,11 +272,17 @@ struct StayPaneMenuView: View {
             Text("After granting access in System Settings, return here. StayPane verifies it automatically before enabling Start.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if model.accessibilityAuthorized && !model.accessibilityGranted {
-                Text("Permission is enabled, but the harmless window-control check did not succeed. Open a normal app window, then choose Check Again.")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.orange)
-            }
+            Label(
+                model.accessibilitySetupState.title,
+                systemImage: model.accessibilityGranted
+                    ? "checkmark.seal.fill"
+                    : "exclamationmark.triangle.fill"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(model.accessibilityGranted ? .green : .orange)
+            Text(model.accessibilitySetupState.guidance)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Button("Request Access & Open Settings") {
                     model.requestAccessibilityAccess()
@@ -261,12 +295,19 @@ struct StayPaneMenuView: View {
             }
         }
         .padding(12)
-        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            adaptiveBackground(.blue, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "Accessibility permission, \(model.accessibilitySetupState.title)"
+        )
     }
 
     private var chromeCompanionCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label("Chrome tab companion", systemImage: "puzzlepiece.extension")
+            Label("Chrome companion — optional", systemImage: "puzzlepiece.extension")
                 .font(.headline)
 
             HStack(spacing: 12) {
@@ -314,7 +355,7 @@ struct StayPaneMenuView: View {
                 }
             }
 
-            Text("One-time local setup: complete Native Host Registration, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
+            Text("Skip Chrome for native Application Targets and Window Targets. Browser Window Targets and Tab Targets require local setup: register the Native Host, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -335,13 +376,19 @@ struct StayPaneMenuView: View {
             }
         }
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.secondary, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Optional Chrome companion setup")
     }
 
     private var reviewView: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Review your session")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("Once the countdown finishes, the selected targets and duration stay locked until the session ends.")
                 .foregroundStyle(.secondary)
 
@@ -428,6 +475,11 @@ struct StayPaneMenuView: View {
                     ? "checkmark.circle"
                     : "exclamationmark.triangle"
             )
+            reviewRow(
+                title: "Completion feedback",
+                value: "Status Panel and menu bar always; notifications optional",
+                systemImage: "bell.badge"
+            )
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Optional macOS Focus reminder", systemImage: "moon.fill")
@@ -445,17 +497,22 @@ struct StayPaneMenuView: View {
                 .buttonStyle(.bordered)
             }
             .padding(10)
-            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .background(
+                adaptiveBackground(.secondary, opacity: 0.08),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
 
             HStack {
                 Button("Back") {
                     model.isReviewing = false
                 }
+                .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Start 3-second countdown") {
                     model.startCountdown()
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -464,9 +521,13 @@ struct StayPaneMenuView: View {
         VStack(spacing: 18) {
             Text("Starting focus session")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("\(model.countdownNumber)")
                 .font(.system(size: 72, weight: .bold, design: .rounded).monospacedDigit())
-                .contentTransition(.numericText())
+                .contentTransition(countdownContentTransition)
+                .accessibilityLabel(
+                    "Session starts in \(model.countdownNumber) seconds"
+                )
             Text("Only \(targetNames(plan.targets)) will remain available for \(model.formattedDuration).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -474,6 +535,7 @@ struct StayPaneMenuView: View {
                 model.cancelCountdown()
             }
             .buttonStyle(.bordered)
+            .keyboardShortcut(.cancelAction)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 35)
@@ -484,10 +546,14 @@ struct StayPaneMenuView: View {
             Label("Enforcement active", systemImage: "lock.fill")
                 .font(.headline)
                 .foregroundStyle(.green)
+                .accessibilityAddTraits(.isHeader)
 
             Text(model.formattedRemainingTime)
                 .font(.system(size: 52, weight: .bold, design: .rounded).monospacedDigit())
-                .contentTransition(.numericText())
+                .contentTransition(countdownContentTransition)
+                .accessibilityLabel(
+                    "\(model.formattedRemainingTime) remaining"
+                )
 
             VStack(spacing: 6) {
                 Text("Allowed targets")
@@ -525,6 +591,7 @@ struct StayPaneMenuView: View {
             Label("Early reset requested", systemImage: "hourglass")
                 .font(.headline)
                 .foregroundStyle(.orange)
+                .accessibilityAddTraits(.isHeader)
 
             if model.isEarlyResetConfirmationAvailable {
                 Text("Final confirmation")
@@ -538,6 +605,7 @@ struct StayPaneMenuView: View {
                         model.declineEarlyResetConfirmation()
                     }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
 
                     Button("End session now", role: .destructive) {
                         model.confirmEarlyReset()
@@ -547,7 +615,10 @@ struct StayPaneMenuView: View {
             } else {
                 Text("\(model.earlyResetCountdownNumber)")
                     .font(.system(size: 62, weight: .bold, design: .rounded).monospacedDigit())
-                    .contentTransition(.numericText())
+                    .contentTransition(countdownContentTransition)
+                    .accessibilityLabel(
+                        "\(model.earlyResetCountdownNumber) seconds until final Early Reset confirmation"
+                    )
                 Text("seconds until final confirmation")
                     .foregroundStyle(.secondary)
                 Text("The original allowlist—\(targetNames(pendingReset.activeSession.plan.targets))—remains enforced. The focus timer is still running.")
@@ -559,6 +630,7 @@ struct StayPaneMenuView: View {
                     model.cancelEarlyReset()
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.cancelAction)
             }
 
             Text("Focus time remaining: \(model.formattedRemainingTime)")
@@ -579,6 +651,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.green)
             Text("Session complete")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("You focused with \(targetNames(completedSession.plan.targets)) for \(StayPaneModel.formatPreset(seconds: completedSession.plan.duration.seconds)).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -601,6 +674,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.orange)
             Text("Session ended early")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("Outcome: Ended Early")
                 .font(.headline)
             Text("Focused for \(StayPaneModel.formatPreset(seconds: Int(endedSession.actualFocusDuration.rounded()))).")
@@ -626,6 +700,7 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.orange)
             Text("Session Interrupted")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("StayPane stopped enforcement and restored what remained controllable because reliable enforcement was lost.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -718,7 +793,12 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.secondary, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Floating Timer preferences")
     }
 
     private var launchAtLoginCard: some View {
@@ -758,7 +838,12 @@ struct StayPaneMenuView: View {
             }
         }
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.secondary, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Launch at Login and Recovery")
         .onAppear {
             launchAtLoginModel.refresh()
         }
@@ -799,6 +884,9 @@ struct StayPaneMenuView: View {
                 Button("Export Diagnostics…") {
                     model.exportDiagnostics()
                 }
+                .accessibilityLabel(
+                    StayPaneAccessibilityText.exportDiagnosticsAction
+                )
             }
             .buttonStyle(.bordered)
 
@@ -807,7 +895,12 @@ struct StayPaneMenuView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.secondary, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(StayPaneAccessibilityText.historyRegion)
     }
 
     private func historyRow(_ record: SessionHistoryRecord) -> some View {
@@ -863,9 +956,12 @@ struct StayPaneMenuView: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(.orange)
         .padding(10)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.orange, opacity: 0.1),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
         .accessibilityLabel(
-            "Broad application access warning: all current and future windows and content in each selected application are allowed."
+            StayPaneAccessibilityText.broadApplicationWarning
         )
     }
 
@@ -877,7 +973,10 @@ struct StayPaneMenuView: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(.blue)
         .padding(10)
-        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.blue, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
     }
 
     private var preciseBrowserTabNote: some View {
@@ -888,7 +987,10 @@ struct StayPaneMenuView: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(.blue)
         .padding(10)
-        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.blue, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
     }
 
     private var broadChromeApplicationWarning: some View {
@@ -899,7 +1001,13 @@ struct StayPaneMenuView: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(.orange)
         .padding(10)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.orange, opacity: 0.1),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityLabel(
+            StayPaneAccessibilityText.broadChromeApplicationWarning
+        )
     }
 
     private var broadChromeWindowWarning: some View {
@@ -910,7 +1018,13 @@ struct StayPaneMenuView: View {
         .font(.caption.weight(.medium))
         .foregroundStyle(.orange)
         .padding(10)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.orange, opacity: 0.1),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .accessibilityLabel(
+            StayPaneAccessibilityText.broadChromeWindowWarning
+        )
     }
 
     @ViewBuilder
@@ -1359,7 +1473,10 @@ struct StayPaneMenuView: View {
             Spacer()
         }
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            adaptiveBackground(.secondary, opacity: 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
     }
 
     private var footer: some View {
@@ -1390,16 +1507,53 @@ struct StayPaneMenuView: View {
         .padding(.vertical, 9)
     }
 
+    private var countdownContentTransition: ContentTransition {
+        visualAccessibilityPolicy
+            .usesAnimatedNumberTransitions
+            ? .numericText()
+            : .identity
+    }
+
+    private var visualAccessibilityPolicy: VisualAccessibilityPolicy {
+        VisualAccessibilityPolicy(
+            reduceMotion: reduceMotion,
+            increasedContrast: contrast == .increased
+        )
+    }
+
+    private func adaptiveBackground(
+        _ color: Color,
+        opacity: Double
+    ) -> Color {
+        color.opacity(
+            visualAccessibilityPolicy.cardOpacity(
+                standardOpacity: opacity
+            )
+        )
+    }
+
 }
 
 private struct NoticeBanner: View {
     let message: String
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         Label(message, systemImage: "info.circle.fill")
             .font(.caption)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
-            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .background(
+                .orange.opacity(
+                    VisualAccessibilityPolicy(
+                        increasedContrast: contrast == .increased
+                    ).cardOpacity(standardOpacity: 0.12)
+                ),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .accessibilityLabel("StayPane status: \(message)")
+            .onAppear {
+                AccessibilityAnnouncer.announce(message)
+            }
     }
 }

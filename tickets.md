@@ -229,23 +229,23 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 ## 13 — Complete first-run onboarding and accessible interaction
 
-**Status:** ready-for-agent
+**Status:** completed
 
 **What to build:** Turn the assembled capabilities into a coherent first-run and daily experience that clearly explains permissions, privacy, notification limitations, browser setup, and the honest self-control boundary.
 
 **Blocked by:** 05 — Deliver the menu-bar and floating-timer experience; 07 — Record private history and export redacted diagnostics; 12 — Harden Chrome profiles, Incognito, and connection failures.
 
-- [ ] First-run onboarding explains StayPane's honest boundary and local-only privacy model in plain language.
-- [ ] Accessibility setup handles not-determined, denied, granted, and later-revoked states.
-- [ ] Chrome setup is optional for application/window sessions and required only for tab-restricted sessions.
-- [ ] The onboarding checklist can install/test the bridge connection and run a harmless window-enforcement verification.
-- [ ] Final session review can remind users to enable macOS Focus and open the relevant settings without claiming automatic control.
-- [ ] Notification denial leaves clear in-app and menu-bar completion feedback.
-- [ ] Every flow is keyboard navigable and exposes meaningful VoiceOver labels, grouping, focus order, and status announcements.
-- [ ] Dark mode, increased contrast, and Reduce Motion are respected.
-- [ ] No onboarding or picker behavior requests Screen Recording permission.
-- [ ] User-facing v1 copy is clear English and consistently uses the specification's domain terms.
-- [ ] Accessibility and UI tests cover onboarding, setup failure, final review, active state, reset, history, diagnostics, and completion.
+- [x] First-run onboarding explains StayPane's honest boundary and local-only privacy model in plain language.
+- [x] Accessibility setup handles not-determined, denied, granted, and later-revoked states.
+- [x] Chrome setup is optional for application/window sessions and required only for tab-restricted sessions.
+- [x] The onboarding checklist can install/test the bridge connection and run a harmless window-enforcement verification.
+- [x] Final session review can remind users to enable macOS Focus and open the relevant settings without claiming automatic control.
+- [x] Notification denial leaves clear in-app and menu-bar completion feedback.
+- [x] Every flow is keyboard navigable and exposes meaningful VoiceOver labels, grouping, focus order, and status announcements.
+- [x] Dark mode, increased contrast, and Reduce Motion are respected.
+- [x] No onboarding or picker behavior requests Screen Recording permission.
+- [x] User-facing v1 copy is clear English and consistently uses the specification's domain terms.
+- [x] Accessibility and UI tests cover onboarding, setup failure, final review, active state, reset, history, diagnostics, and completion.
 
 ## 14 — Verify the source-only v1 release from a fresh clone
 

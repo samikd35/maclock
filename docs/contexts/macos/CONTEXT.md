@@ -28,6 +28,26 @@ _Avoid_: Reopen, workspace reset
 The native StayPane interface that presents setup while idle and immutable Session status while enforcement is active.
 _Avoid_: Popup, dashboard, setup window
 
+**First-Run Onboarding**:
+The locally persisted introductory checklist that explains the honest self-control boundary, local-only privacy, Accessibility setup, optional Chrome setup, notification-independent completion feedback, and the Focus Reminder before ordinary Session setup.
+_Avoid_: Account setup, signup, tutorial tour
+
+**Accessibility Setup State**:
+The honest result of macOS authorization plus StayPane's verification: Not Requested, Access Not Granted, Enabled but Unverified, Verified, or Revoked after earlier verification. Only Verified permits Session start.
+_Avoid_: Permission boolean, trusted mode, security status
+
+**Harmless Window-Control Verification**:
+Writing one ordinary window's existing minimized value back unchanged to verify Accessibility control without moving, resizing, closing, revealing, or capturing window content.
+_Avoid_: Test Session, screen test, sample enforcement
+
+**Chrome Setup State**:
+The First-Run Onboarding summary of local Native Bridge availability, Native Host Registration, and Chrome Profile Integration States: Native Bridge Unavailable, Native Host Not Registered, Waiting for Profile Connection, Synchronizing, Connected Profile Needs Attention, or Ready. Chrome setup remains optional until the user chooses a Browser Window Target or Tab Target.
+_Avoid_: Chrome permission, browser security status, extension installed boolean
+
+**Focus Reminder**:
+The optional final-review guidance that can open macOS Focus settings while stating that StayPane does not automatically toggle Focus or automate Control Center.
+_Avoid_: Focus integration, automatic Do Not Disturb, notification enforcement
+
 **Session Presence**:
 The calm native status shown across the menu bar, Status Panel, and optional Floating Timer during and briefly after a Session.
 _Avoid_: Native presence, timer chrome

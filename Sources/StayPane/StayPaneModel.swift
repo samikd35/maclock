@@ -22,7 +22,6 @@ struct BrowserProfilePresentation: Equatable, Identifiable {
 @MainActor
 final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandling {
     static let lastDurationKey = "lastSessionDurationSeconds"
-    static let accessibilityIntroKey = "hasSeenAccessibilityIntro"
 
     @Published private(set) var state: SessionState = .idle
     @Published private(set) var applications: [ApplicationCatalogItem] = []
@@ -44,7 +43,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var durationValidationMessage: String?
     @Published private(set) var accessibilityAuthorized = false
     @Published private(set) var accessibilityGranted = false
+    @Published private(set) var accessibilitySetupState: AccessibilitySetupState
     @Published private(set) var shouldExplainAccessibility = true
+    @Published private(set) var isOnboardingPresented: Bool
     @Published var isReviewing = false
     @Published private(set) var remainingTime: TimeInterval = 0
     @Published private(set) var earlyResetRemainingTime: TimeInterval = 0
@@ -54,6 +55,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private var transientSessionPresence: SessionPresence?
 
     private let defaults: UserDefaults
+    private let onboardingWorkflow: AccessibilityOnboardingWorkflow
     private let permissionClient: AccessibilityPermissionClient
     private let applicationCatalog: ApplicationCatalog
     private let windowCatalog: AccessibilityWindowCatalog
@@ -62,6 +64,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private let historyController: SessionHistoryController
     private let diagnosticLog: DiagnosticLog
     private let nativeBridge: NativeBridgeController?
+    private let chromeConnectionWorkflow: ChromeConnectionWorkflow
     private let engine: SessionEngine
     private var lastPermissionCheck = Date.distantPast
     private var noticeTask: Task<Void, Never>?
@@ -73,7 +76,20 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        permissionClient = AccessibilityPermissionClient()
+        let onboardingProgressStore = OnboardingProgressStore(defaults: defaults)
+        let permissionClient = AccessibilityPermissionClient()
+        self.permissionClient = permissionClient
+        let onboardingWorkflow = AccessibilityOnboardingWorkflow(
+            progressStore: onboardingProgressStore,
+            client: permissionClient
+        )
+        self.onboardingWorkflow = onboardingWorkflow
+        isOnboardingPresented = !onboardingWorkflow.progress.isCompleted
+        accessibilitySetupState = AccessibilitySetupState.resolve(
+            progress: onboardingWorkflow.progress,
+            isAuthorized: false,
+            verificationSucceeded: false
+        )
         applicationCatalog = ApplicationCatalog()
         let windowCatalog = AccessibilityWindowCatalog()
         self.windowCatalog = windowCatalog
@@ -89,6 +105,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         diagnosticLog = DiagnosticLog()
         let createdNativeBridge = try? NativeBridgeController()
         nativeBridge = createdNativeBridge
+        chromeConnectionWorkflow = ChromeConnectionWorkflow(
+            bridge: createdNativeBridge
+        )
         let browserEnforcement: any BrowserEnforcing
         if let createdNativeBridge {
             browserEnforcement = createdNativeBridge
@@ -206,7 +225,8 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         durationSeconds = durationFromEngine()
         synchronizeWithEngine()
         refreshAccessibilityStatus()
-        shouldExplainAccessibility = !defaults.bool(forKey: Self.accessibilityIntroKey)
+        shouldExplainAccessibility = !onboardingWorkflow.progress
+            .hasRequestedAccessibility
             || !accessibilityGranted
         refreshApplications()
         try? nativeBridge?.poll()
@@ -329,6 +349,56 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             }
             && selectedBrowserIntegrationsReady
             && SessionDuration(seconds: durationSeconds) != nil
+    }
+
+    var chromeSetupState: ChromeSetupState {
+        ChromeSetupState.resolve(
+            nativeBridgeAvailable: nativeBridge != nil,
+            nativeHostRegistered: nativeHostRegistered,
+            profileSummary: ChromeProfileSetupSummary(
+                readyCount: browserProfiles.count {
+                    $0.availability == .ready
+                },
+                synchronizingCount: browserProfiles.count {
+                    $0.availability == .synchronizing
+                },
+                needsAttentionCount: browserProfiles.count {
+                    $0.availability == .incognitoWindowControlRequired
+                }
+            )
+        )
+    }
+
+    var onboardingChecklist: OnboardingChecklist {
+        OnboardingChecklist(
+            accessibility: accessibilitySetupState,
+            chrome: chromeSetupState
+        )
+    }
+
+    var shouldPresentOnboarding: Bool {
+        guard isOnboardingPresented else {
+            return false
+        }
+        switch state {
+        case .idle, .configuring, .ready:
+            return true
+        case .starting, .recovering, .enforcing, .resetPending,
+             .completed, .endedEarly, .interrupted:
+            return false
+        }
+    }
+
+    var statusPanelAccessibilityPresentation:
+        StatusPanelAccessibilityPresentation
+    {
+        StatusPanelAccessibilityPresentation.resolve(
+            shouldPresentOnboarding: shouldPresentOnboarding,
+            isReviewing: isReviewing,
+            sessionState: state,
+            isResetConfirmationAvailable:
+                isEarlyResetConfirmationAvailable
+        )
     }
 
     var formattedDuration: String {
@@ -752,26 +822,83 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func requestAccessibilityAccess() {
-        defaults.set(true, forKey: Self.accessibilityIntroKey)
         shouldExplainAccessibility = true
-        permissionClient.requestAccess()
-        permissionClient.openSystemSettings()
+        onboardingWorkflow.requestAccess()
         refreshAccessibilityStatus()
     }
 
     func refreshAccessibilityStatus(forceVerification: Bool = true) {
-        accessibilityAuthorized = permissionClient.isGranted
-        guard accessibilityAuthorized else {
-            accessibilityGranted = false
-            return
-        }
-
-        if forceVerification || !accessibilityGranted {
-            accessibilityGranted = permissionClient.verifyWindowControl()
-        }
+        let result = onboardingWorkflow.verify(
+            previousVerificationSucceeded: accessibilityGranted,
+            forceVerification: forceVerification
+        )
+        accessibilityAuthorized = result.isAuthorized
+        accessibilityGranted = result.verificationSucceeded
+        accessibilitySetupState = result.setupState
         if accessibilityGranted {
             shouldExplainAccessibility = false
         }
+    }
+
+    func runHarmlessWindowControlTest() {
+        refreshAccessibilityStatus()
+        if accessibilityGranted {
+            showNotice(
+                "Accessibility Verified. The Harmless Window-Control Verification changed no window layout or content."
+            )
+        } else {
+            showNotice(accessibilitySetupState.guidance)
+        }
+    }
+
+    func testChromeConnection() {
+        switch chromeConnectionWorkflow.testConnection() {
+        case .nativeBridgeUnavailable:
+            showNotice(ChromeSetupState.nativeBridgeUnavailable.guidance)
+            return
+        case .pollFailed:
+            showNotice(
+                "The local Native Bridge test failed. Repair registration, reload the companion, and try again."
+            )
+            return
+        case .polled:
+            break
+        }
+        refreshNativeHostRegistrationStatus()
+        synchronizeBrowserPresentation()
+        switch chromeSetupState {
+        case let .ready(summary):
+            let attention = summary.needsAttentionCount == 0
+                ? ""
+                : " \(summary.needsAttentionCount) other Chrome \(summary.needsAttentionCount == 1 ? "Profile still needs" : "Profiles still need") attention."
+            let synchronization = summary.synchronizingCount == 0
+                ? ""
+                : " \(summary.synchronizingCount) other Chrome \(summary.synchronizingCount == 1 ? "Profile is" : "Profiles are") still Synchronizing."
+            showNotice(
+                "Local Chrome connection verified for \(summary.readyCount) Chrome \(summary.readyCount == 1 ? "Profile" : "Profiles").\(synchronization)\(attention)"
+            )
+        case .nativeBridgeUnavailable, .nativeHostNotRegistered,
+             .waitingForProfileConnection, .synchronizing,
+             .connectedProfileNeedsAttention:
+            showNotice(chromeSetupState.guidance)
+        }
+    }
+
+    func finishOnboarding() {
+        guard onboardingWorkflow.complete(onboardingChecklist) else {
+            showNotice(
+                "Complete the Harmless Window-Control Verification before finishing First-Run Onboarding."
+            )
+            return
+        }
+        isOnboardingPresented = false
+        showNotice(
+            "Onboarding complete. Choose a duration and at least one Target for your first Session."
+        )
+    }
+
+    func showOnboarding() {
+        isOnboardingPresented = true
     }
 
     func beginReview() {

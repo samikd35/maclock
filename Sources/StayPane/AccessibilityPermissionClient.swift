@@ -8,7 +8,14 @@ protocol AccessibilityPermissionChecking: AnyObject {
 }
 
 @MainActor
-final class AccessibilityPermissionClient: AccessibilityPermissionChecking {
+protocol AccessibilityOnboardingAccessing: AccessibilityPermissionChecking {
+    @discardableResult
+    func requestAccess() -> Bool
+    func openSystemSettings()
+}
+
+@MainActor
+final class AccessibilityPermissionClient: AccessibilityOnboardingAccessing {
     var isGranted: Bool {
         AXIsProcessTrusted()
     }
