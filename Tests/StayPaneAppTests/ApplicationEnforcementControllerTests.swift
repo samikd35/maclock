@@ -176,6 +176,73 @@ import Testing
 }
 
 @MainActor
+@Test func broadApplicationSessionMinimizesBlockedWindowUsingCoreGraphicsIdentity() throws {
+    let chromeProcessIdentifier: Int32 = 3_300
+    let chatProcessIdentifier: Int32 = 7_300
+    let blockedElement = AXUIElementCreateApplication(73_001)
+    let provider = MappedEnforcementWindowProvider(
+        descriptorsByProcessIdentifier: [
+            chromeProcessIdentifier: [],
+            chatProcessIdentifier: [
+                AccessibilityWindowDescriptor(
+                    element: blockedElement,
+                    title: "Conversation",
+                    role: "AXWindow",
+                    subrole: "AXStandardWindow",
+                    isModal: false,
+                    isFocused: false,
+                    parentElement: nil,
+                    frame: CGRect(x: 0, y: 34, width: 1_710, height: 987),
+                    coreGraphicsWindowNumber: 175
+                )
+            ],
+        ]
+    )
+    let operatorClient = RecordingWindowOperator()
+    let store = FakeWindowEnforcementStore()
+    let workspace = FixtureWorkspaceApplicationAccess(
+        runningApplicationSnapshots: [
+            WorkspaceApplicationSnapshot(
+                displayName: "Google Chrome",
+                bundleIdentifier: "com.google.Chrome",
+                processIdentifier: chromeProcessIdentifier
+            ),
+            WorkspaceApplicationSnapshot(
+                displayName: "Chat",
+                bundleIdentifier: "com.example.chat",
+                processIdentifier: chatProcessIdentifier
+            ),
+        ]
+    )
+    let controller = ApplicationEnforcementController(
+        permissionClient: FakePermissionChecker(isGranted: true),
+        availabilityResolver: FakeApplicationAvailabilityResolver(available: true),
+        windowCatalog: AccessibilityWindowCatalog(provider: provider),
+        notificationCenter: NotificationCenter(),
+        windowOperator: operatorClient,
+        windowEnforcementStore: store,
+        workspaceApplications: workspace
+    )
+    let chrome = ApplicationTarget(
+        displayName: "Google Chrome",
+        bundleIdentifier: "com.google.Chrome",
+        processIdentifier: chromeProcessIdentifier
+    )
+
+    try controller.start(allowing: [.application(chrome)])
+    controller.suspendForSystemTermination()
+
+    #expect(operatorClient.minimizedElements.count == 1)
+    #expect(provider.discoveryBatchCount == 1)
+    #expect(provider.completedDiscoveryBatchCount == 1)
+    let restorationReference = try #require(
+        store.snapshot?.restorationReferences.first
+    )
+    #expect(restorationReference.bundleIdentifier == "com.example.chat")
+    #expect(restorationReference.coreGraphicsWindowNumber == 175)
+}
+
+@MainActor
 private final class EnforcementTestClock: SessionClock {
     var now: Date
     var continuousNow: TimeInterval = 0
@@ -244,6 +311,81 @@ private final class EnforcementWindowProvider: AccessibilityWindowProviding {
 
     func windows(processIdentifier: Int32) throws -> [AccessibilityWindowDescriptor] {
         [descriptor]
+    }
+}
+
+@MainActor
+private final class MappedEnforcementWindowProvider: AccessibilityWindowProviding {
+    let descriptorsByProcessIdentifier: [Int32: [AccessibilityWindowDescriptor]]
+    private(set) var discoveryBatchCount = 0
+    private(set) var completedDiscoveryBatchCount = 0
+
+    init(
+        descriptorsByProcessIdentifier: [Int32: [AccessibilityWindowDescriptor]]
+    ) {
+        self.descriptorsByProcessIdentifier = descriptorsByProcessIdentifier
+    }
+
+    func beginWindowDiscoveryBatch() {
+        discoveryBatchCount += 1
+    }
+
+    func endWindowDiscoveryBatch() {
+        completedDiscoveryBatchCount += 1
+    }
+
+    func windows(processIdentifier: Int32) throws -> [AccessibilityWindowDescriptor] {
+        descriptorsByProcessIdentifier[processIdentifier] ?? []
+    }
+}
+
+@MainActor
+private final class RecordingWindowOperator: AccessibilityWindowOperating {
+    private(set) var minimizedElements: [AXUIElement] = []
+
+    func minimizedState(of window: AXUIElement) -> AccessibilityWindowState {
+        minimizedElements.contains(where: { CFEqual($0, window) })
+            ? .minimized(true)
+            : .minimized(false)
+    }
+
+    func setMinimized(
+        _ minimized: Bool,
+        for window: AXUIElement
+    ) -> AccessibilityWindowWriteResult {
+        if minimized {
+            minimizedElements.append(window)
+        } else {
+            minimizedElements.removeAll(where: { CFEqual($0, window) })
+        }
+        return .success
+    }
+
+    func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult {
+        .success
+    }
+}
+
+@MainActor
+private final class FixtureWorkspaceApplicationAccess: WorkspaceApplicationAccessing {
+    let runningApplicationSnapshots: [WorkspaceApplicationSnapshot]
+    let frontmostProcessIdentifier: Int32? = nil
+
+    init(runningApplicationSnapshots: [WorkspaceApplicationSnapshot]) {
+        self.runningApplicationSnapshots = runningApplicationSnapshots
+    }
+
+    var runningApplications: [NSRunningApplication] { [] }
+    var frontmostApplication: NSRunningApplication? { nil }
+
+    func application(processIdentifier: Int32) -> NSRunningApplication? {
+        nil
+    }
+
+    func runningApplications(
+        bundleIdentifier: String
+    ) -> [NSRunningApplication] {
+        []
     }
 }
 

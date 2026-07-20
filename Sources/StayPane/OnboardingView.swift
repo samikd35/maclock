@@ -79,7 +79,7 @@ struct OnboardingView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(accessibilityColor(state))
             Text(
-                "StayPane uses macOS Accessibility only to discover, minimize, restore, and refocus windows. The Harmless Window-Control Verification writes a window's existing minimized value back unchanged; it does not move, resize, close, or reveal content. Screen Recording is never requested."
+                "StayPane uses macOS Accessibility to discover, minimize, restore, and refocus windows. When an app omits a stable Accessibility window identifier, StayPane may correlate its geometry with a public Core Graphics window number so Restoration can identify the same window. The Harmless Window-Control Verification writes a window's existing minimized value back unchanged; StayPane never reads window pixels or requests Screen Recording."
             )
             .font(.caption)
             Text(state.guidance)

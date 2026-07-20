@@ -29,6 +29,7 @@ func systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn() throws {
         defer: false
     )
     fixtureWindow.title = title
+    fixtureWindow.setAccessibilityIdentifier(nil)
     fixtureWindow.makeKeyAndOrderFront(nil)
     defer {
         fixtureWindow.orderOut(nil)
@@ -44,6 +45,11 @@ func systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn() throws {
 
     #expect(fixture.frame != nil)
     #expect(fixture.isFocused)
+    #expect(fixture.accessibilityIdentifier == nil)
+    #expect(
+        fixture.coreGraphicsWindowNumber
+            == UInt32(fixtureWindow.windowNumber)
+    )
     #expect(operatorClient.minimizedState(of: fixture.element) == .minimized(false))
     #expect(operatorClient.setMinimized(true, for: fixture.element) == .success)
     #expect(operatorClient.minimizedState(of: fixture.element) == .minimized(true))

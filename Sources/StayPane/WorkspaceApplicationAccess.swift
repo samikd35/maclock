@@ -1,11 +1,68 @@
 import AppKit
+import StayPaneCore
+
+struct WorkspaceApplicationSnapshot: Equatable {
+    let displayName: String
+    let bundleIdentifier: String
+    let processIdentifier: Int32
+    let applicationURL: URL?
+
+    init(
+        displayName: String,
+        bundleIdentifier: String,
+        processIdentifier: Int32,
+        applicationURL: URL? = nil
+    ) {
+        self.displayName = displayName
+        self.bundleIdentifier = bundleIdentifier
+        self.processIdentifier = processIdentifier
+        self.applicationURL = applicationURL
+    }
+
+    init?(_ application: NSRunningApplication) {
+        guard
+            application.activationPolicy == .regular,
+            !application.isTerminated,
+            let bundleIdentifier = application.bundleIdentifier
+        else {
+            return nil
+        }
+        self.init(
+            displayName: application.localizedName ?? "Application",
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: application.processIdentifier,
+            applicationURL: application.bundleURL
+        )
+    }
+
+    var target: ApplicationTarget {
+        ApplicationTarget(
+            displayName: displayName,
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: processIdentifier,
+            applicationURL: applicationURL
+        )
+    }
+}
 
 @MainActor
 protocol WorkspaceApplicationAccessing: AnyObject {
     var runningApplications: [NSRunningApplication] { get }
     var frontmostApplication: NSRunningApplication? { get }
+    var runningApplicationSnapshots: [WorkspaceApplicationSnapshot] { get }
+    var frontmostProcessIdentifier: Int32? { get }
     func application(processIdentifier: Int32) -> NSRunningApplication?
     func runningApplications(bundleIdentifier: String) -> [NSRunningApplication]
+}
+
+extension WorkspaceApplicationAccessing {
+    var runningApplicationSnapshots: [WorkspaceApplicationSnapshot] {
+        runningApplications.compactMap(WorkspaceApplicationSnapshot.init)
+    }
+
+    var frontmostProcessIdentifier: Int32? {
+        frontmostApplication?.processIdentifier
+    }
 }
 
 @MainActor

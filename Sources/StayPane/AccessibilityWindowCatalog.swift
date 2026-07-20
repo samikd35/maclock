@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import StayPaneCore
 
 enum AccessibilityWindowCatalogError: LocalizedError {
@@ -26,6 +27,7 @@ struct AccessibilityWindowDescriptor {
     let parentElement: AXUIElement?
     let frame: CGRect?
     let accessibilityIdentifier: String?
+    let coreGraphicsWindowNumber: UInt32?
 
     init(
         element: AXUIElement,
@@ -36,7 +38,8 @@ struct AccessibilityWindowDescriptor {
         isFocused: Bool,
         parentElement: AXUIElement?,
         frame: CGRect?,
-        accessibilityIdentifier: String? = nil
+        accessibilityIdentifier: String? = nil,
+        coreGraphicsWindowNumber: UInt32? = nil
     ) {
         self.element = element
         self.title = title
@@ -47,16 +50,138 @@ struct AccessibilityWindowDescriptor {
         self.parentElement = parentElement
         self.frame = frame
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.coreGraphicsWindowNumber = coreGraphicsWindowNumber
     }
 }
 
 @MainActor
 protocol AccessibilityWindowProviding: AnyObject {
+    func beginWindowDiscoveryBatch()
+    func endWindowDiscoveryBatch()
     func windows(processIdentifier: Int32) throws -> [AccessibilityWindowDescriptor]
+}
+
+extension AccessibilityWindowProviding {
+    func beginWindowDiscoveryBatch() {}
+    func endWindowDiscoveryBatch() {}
+}
+
+struct CoreGraphicsWindowObservation: Equatable {
+    let processIdentifier: Int32
+    let windowNumber: UInt32
+    let frame: CGRect
+}
+
+struct CoreGraphicsWindowIdentityResolver {
+    static func windowNumber(
+        processIdentifier: Int32,
+        frame: CGRect,
+        observations: [CoreGraphicsWindowObservation]
+    ) -> UInt32? {
+        let matches = observations.filter {
+            $0.processIdentifier == processIdentifier
+                && framesMatch($0.frame, frame)
+        }
+        guard matches.count == 1 else {
+            return nil
+        }
+        return matches[0].windowNumber
+    }
+
+    private static func framesMatch(_ first: CGRect, _ second: CGRect) -> Bool {
+        let tolerance: CGFloat = 1
+        return abs(first.minX - second.minX) <= tolerance
+            && abs(first.minY - second.minY) <= tolerance
+            && abs(first.width - second.width) <= tolerance
+            && abs(first.height - second.height) <= tolerance
+    }
+}
+
+protocol CoreGraphicsWindowObserving {
+    func observations() -> [CoreGraphicsWindowObservation]
+}
+
+struct SystemCoreGraphicsWindowObserver: CoreGraphicsWindowObserving {
+    func observations() -> [CoreGraphicsWindowObservation] {
+        guard let windowInfo = CGWindowListCopyWindowInfo(
+            .optionAll,
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+
+        return windowInfo.compactMap { item in
+            guard
+                let ownerProcess = item[kCGWindowOwnerPID as String] as? NSNumber,
+                let layer = item[kCGWindowLayer as String] as? NSNumber,
+                layer.intValue == 0,
+                let windowNumber = item[kCGWindowNumber as String] as? NSNumber,
+                let boundsDictionary = item[kCGWindowBounds as String] as? NSDictionary,
+                let frame = CGRect(
+                    dictionaryRepresentation: boundsDictionary
+                ),
+                frame.width > 0,
+                frame.height > 0
+            else {
+                return nil
+            }
+            return CoreGraphicsWindowObservation(
+                processIdentifier: ownerProcess.int32Value,
+                windowNumber: windowNumber.uint32Value,
+                frame: frame
+            )
+        }
+    }
+}
+
+@MainActor
+final class CoreGraphicsWindowInventory {
+    private let observer: any CoreGraphicsWindowObserving
+    private var discoveryBatch: [CoreGraphicsWindowObservation]?
+
+    init(observer: any CoreGraphicsWindowObserving) {
+        self.observer = observer
+    }
+
+    func beginDiscoveryBatch() {
+        discoveryBatch = observer.observations()
+    }
+
+    func endDiscoveryBatch() {
+        discoveryBatch = nil
+    }
+
+    func observations(
+        processIdentifier: Int32
+    ) -> [CoreGraphicsWindowObservation] {
+        let observations = discoveryBatch ?? observer.observations()
+        return observations.filter {
+            $0.processIdentifier == processIdentifier
+        }
+    }
 }
 
 @MainActor
 final class SystemAccessibilityWindowProvider: AccessibilityWindowProviding {
+    private let coreGraphicsWindowInventory: CoreGraphicsWindowInventory
+
+    init(
+        coreGraphicsWindowObserver: any CoreGraphicsWindowObserving =
+            SystemCoreGraphicsWindowObserver()
+    ) {
+        coreGraphicsWindowInventory = CoreGraphicsWindowInventory(
+            observer: coreGraphicsWindowObserver
+        )
+    }
+
+    func beginWindowDiscoveryBatch() {
+        coreGraphicsWindowInventory.beginDiscoveryBatch()
+    }
+
+    func endWindowDiscoveryBatch() {
+        coreGraphicsWindowInventory.endDiscoveryBatch()
+    }
+
     func windows(processIdentifier: Int32) throws -> [AccessibilityWindowDescriptor] {
         let applicationElement = AXUIElementCreateApplication(processIdentifier)
         var windowsValue: CFTypeRef?
@@ -77,8 +202,12 @@ final class SystemAccessibilityWindowProvider: AccessibilityWindowProviding {
             kAXFocusedWindowAttribute,
             of: applicationElement
         )
+        let coreGraphicsWindows = coreGraphicsWindowInventory.observations(
+            processIdentifier: processIdentifier
+        )
         return windows.map { window in
-            AccessibilityWindowDescriptor(
+            let frame = frame(of: window)
+            return AccessibilityWindowDescriptor(
                 element: window,
                 title: stringValue(kAXTitleAttribute, of: window)
                     .flatMap { $0.isEmpty ? nil : $0 }
@@ -88,11 +217,18 @@ final class SystemAccessibilityWindowProvider: AccessibilityWindowProviding {
                 isModal: boolValue(kAXModalAttribute, of: window) ?? false,
                 isFocused: focusedWindow.map { CFEqual($0, window) } ?? false,
                 parentElement: elementValue(kAXParentAttribute, of: window),
-                frame: frame(of: window),
+                frame: frame,
                 accessibilityIdentifier: stringValue(
                     kAXIdentifierAttribute,
                     of: window
-                )
+                ),
+                coreGraphicsWindowNumber: frame.flatMap {
+                    CoreGraphicsWindowIdentityResolver.windowNumber(
+                        processIdentifier: processIdentifier,
+                        frame: $0,
+                        observations: coreGraphicsWindows
+                    )
+                }
             )
         }
     }
@@ -176,7 +312,7 @@ final class AccessibilityWindowCatalog {
     private struct PersistentIdentityKey: Hashable {
         let bundleIdentifier: String
         let processIdentifier: Int32
-        let accessibilityIdentifier: String
+        let identity: PersistentWindowIdentity
     }
 
     private struct RegistryEntry {
@@ -208,10 +344,20 @@ final class AccessibilityWindowCatalog {
                 PersistentIdentityKey(
                     bundleIdentifier: reference.bundleIdentifier,
                     processIdentifier: reference.processIdentifier,
-                    accessibilityIdentifier: reference.accessibilityIdentifier
+                    identity: reference.identity
                 )
             ] = reference.windowIdentifier
         }
+    }
+
+    func withWindowDiscoveryBatch<Result>(
+        _ operation: () throws -> Result
+    ) rethrows -> Result {
+        provider.beginWindowDiscoveryBatch()
+        defer {
+            provider.endWindowDiscoveryBatch()
+        }
+        return try operation()
     }
 
     func loadWindows(
@@ -258,14 +404,24 @@ final class AccessibilityWindowCatalog {
             grouping: descriptors.compactMap(\.accessibilityIdentifier),
             by: { $0 }
         ).mapValues(\.count)
-        let descriptorIdentifiers = descriptors.map { descriptor in
+        let coreGraphicsWindowNumberCounts = Dictionary(
+            grouping: descriptors.compactMap(\.coreGraphicsWindowNumber),
+            by: { $0 }
+        ).mapValues(\.count)
+        let persistentIdentities = descriptors.map { descriptor in
+            persistentIdentity(
+                for: descriptor,
+                accessibilityIdentifierCounts: accessibilityIdentifierCounts,
+                coreGraphicsWindowNumberCounts: coreGraphicsWindowNumberCounts
+            )
+        }
+        let descriptorIdentifiers = zip(descriptors, persistentIdentities).map {
+            descriptor, persistentIdentity in
             identifier(
                 for: descriptor,
                 processIdentifier: processIdentifier,
                 bundleIdentifier: application.bundleIdentifier,
-                persistentIdentityIsUnique: descriptor.accessibilityIdentifier.map {
-                    accessibilityIdentifierCounts[$0] == 1
-                } ?? false
+                persistentIdentity: persistentIdentity
             )
         }
         for (identifier, descriptor) in zip(descriptorIdentifiers, descriptors) {
@@ -273,8 +429,9 @@ final class AccessibilityWindowCatalog {
             latestProcessIdentifiers[identifier] = processIdentifier
         }
 
-        return zip(descriptorIdentifiers, descriptors)
-            .map { identifier, descriptor in
+        return zip(zip(descriptorIdentifiers, descriptors), persistentIdentities)
+            .map { pair, persistentIdentity in
+                let (identifier, descriptor) = pair
                 let target = WindowTarget(
                     id: identifier,
                     title: descriptor.title,
@@ -294,15 +451,12 @@ final class AccessibilityWindowCatalog {
                         )
                     ),
                     isFocused: descriptor.isFocused,
-                    exactReference: descriptor.accessibilityIdentifier.flatMap {
-                        guard accessibilityIdentifierCounts[$0] == 1 else {
-                            return nil
-                        }
-                        return ExactWindowReference(
+                    exactReference: persistentIdentity.map {
+                        exactWindowReference(
                             windowIdentifier: identifier,
                             bundleIdentifier: application.bundleIdentifier,
                             processIdentifier: processIdentifier,
-                            accessibilityIdentifier: $0
+                            persistentIdentity: $0
                         )
                     }
                 )
@@ -332,7 +486,7 @@ final class AccessibilityWindowCatalog {
         for descriptor: AccessibilityWindowDescriptor,
         processIdentifier: Int32,
         bundleIdentifier: String,
-        persistentIdentityIsUnique: Bool
+        persistentIdentity: PersistentWindowIdentity?
     ) -> WindowIdentifier {
         if let existing = registry.first(where: {
             $0.processIdentifier == processIdentifier
@@ -341,16 +495,13 @@ final class AccessibilityWindowCatalog {
             return existing.identifier
         }
 
-        let reconnectedIdentifier: WindowIdentifier? = descriptor
-            .accessibilityIdentifier.flatMap {
-                guard persistentIdentityIsUnique else {
-                    return nil
-                }
+        let reconnectedIdentifier: WindowIdentifier? = persistentIdentity
+            .flatMap {
                 return reconnectedIdentifiers.removeValue(
                     forKey: PersistentIdentityKey(
                         bundleIdentifier: bundleIdentifier,
                         processIdentifier: processIdentifier,
-                        accessibilityIdentifier: $0
+                        identity: $0
                     )
                 )
             }
@@ -363,6 +514,48 @@ final class AccessibilityWindowCatalog {
             )
         )
         return identifier
+    }
+
+    private func persistentIdentity(
+        for descriptor: AccessibilityWindowDescriptor,
+        accessibilityIdentifierCounts: [String: Int],
+        coreGraphicsWindowNumberCounts: [UInt32: Int]
+    ) -> PersistentWindowIdentity? {
+        if let accessibilityIdentifier = descriptor.accessibilityIdentifier,
+           accessibilityIdentifierCounts[accessibilityIdentifier] == 1
+        {
+            return .accessibilityIdentifier(accessibilityIdentifier)
+        }
+        if let coreGraphicsWindowNumber = descriptor.coreGraphicsWindowNumber,
+           coreGraphicsWindowNumberCounts[coreGraphicsWindowNumber] == 1
+        {
+            return .coreGraphicsWindowNumber(coreGraphicsWindowNumber)
+        }
+        return nil
+    }
+
+    private func exactWindowReference(
+        windowIdentifier: WindowIdentifier,
+        bundleIdentifier: String,
+        processIdentifier: Int32,
+        persistentIdentity: PersistentWindowIdentity
+    ) -> ExactWindowReference {
+        switch persistentIdentity {
+        case let .accessibilityIdentifier(accessibilityIdentifier):
+            return ExactWindowReference(
+                windowIdentifier: windowIdentifier,
+                bundleIdentifier: bundleIdentifier,
+                processIdentifier: processIdentifier,
+                accessibilityIdentifier: accessibilityIdentifier
+            )
+        case let .coreGraphicsWindowNumber(coreGraphicsWindowNumber):
+            return ExactWindowReference(
+                windowIdentifier: windowIdentifier,
+                bundleIdentifier: bundleIdentifier,
+                processIdentifier: processIdentifier,
+                coreGraphicsWindowNumber: coreGraphicsWindowNumber
+            )
+        }
     }
 
     private func relationship(

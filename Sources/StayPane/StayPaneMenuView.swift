@@ -267,7 +267,7 @@ struct StayPaneMenuView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Accessibility permission", systemImage: "hand.raised.fill")
                 .font(.headline)
-            Text("StayPane uses macOS Accessibility only to see, minimize, restore, and refocus app windows during a session. It never quits apps and does not need Screen Recording.")
+            Text("StayPane uses macOS Accessibility to see, minimize, restore, and refocus app windows during a Session. It may correlate window geometry with a public Core Graphics window number when an app omits a stable Accessibility identifier. It never reads window pixels, quits apps, or needs Screen Recording.")
                 .font(.subheadline)
             Text("After granting access in System Settings, return here. StayPane verifies it automatically before enabling Start.")
                 .font(.caption)

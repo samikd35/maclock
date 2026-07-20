@@ -331,43 +331,41 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
 
     private func enforceCurrentWindows() throws {
         lastFullScanUptime = ProcessInfo.processInfo.systemUptime
-        let frontmostProcessIdentifier = workspaceApplications.frontmostApplication?
-            .processIdentifier
+        let frontmostProcessIdentifier = workspaceApplications
+            .frontmostProcessIdentifier
         var refocusTarget: TargetIdentifier?
         var blockedNotice: String?
 
-        for application in workspaceApplications.runningApplications where
-            application.activationPolicy == .regular
-                && !application.isTerminated
-                && application.processIdentifier != ProcessInfo.processInfo.processIdentifier
-        {
-            guard
-                let bundleIdentifier = application.bundleIdentifier,
-                !AccessibilityWindowCatalog.isEssentialSystemApplication(
+        try windowCatalog.withWindowDiscoveryBatch {
+            for application in workspaceApplications.runningApplicationSnapshots where
+                application.processIdentifier != ProcessInfo.processInfo.processIdentifier
+            {
+                let bundleIdentifier = application.bundleIdentifier
+                guard !AccessibilityWindowCatalog.isEssentialSystemApplication(
                     bundleIdentifier: bundleIdentifier
-                )
-            else {
-                continue
-            }
-
-            let target = makeApplicationTarget(application)
-            let windows = try windowCatalog.catalogueWindows(for: target)
-
-            if application.processIdentifier == frontmostProcessIdentifier {
-                if let focusedWindow = windows.first(where: \.isFocused) {
-                    if case let .block(preferredTarget) = windowPolicy.handleActivation(
-                        focusedWindow.observation
-                    ) {
-                        refocusTarget = preferredTarget
-                        blockedNotice = "\(focusedWindow.target.title) is outside this focus session."
-                    }
-                } else if !isEntireApplicationAllowed(
-                    bundleIdentifier: bundleIdentifier
-                ) {
-                    blockedNotice = "\(target.displayName) is outside this focus session."
+                ) else {
+                    continue
                 }
+
+                let target = application.target
+                let windows = try windowCatalog.catalogueWindows(for: target)
+
+                if application.processIdentifier == frontmostProcessIdentifier {
+                    if let focusedWindow = windows.first(where: \.isFocused) {
+                        if case let .block(preferredTarget) = windowPolicy.handleActivation(
+                            focusedWindow.observation
+                        ) {
+                            refocusTarget = preferredTarget
+                            blockedNotice = "\(focusedWindow.target.title) is outside this focus session."
+                        }
+                    } else if !isEntireApplicationAllowed(
+                        bundleIdentifier: bundleIdentifier
+                    ) {
+                        blockedNotice = "\(target.displayName) is outside this focus session."
+                    }
+                }
+                try enforce(windows: windows, applicationName: target.displayName)
             }
-            try enforce(windows: windows, applicationName: target.displayName)
         }
 
         if let blockedNotice {

@@ -5,6 +5,74 @@ import Testing
 @testable import StayPane
 
 @MainActor
+@Test func coreGraphicsInventoryIsCapturedOncePerDiscoveryBatch() {
+    let observer = CountingCoreGraphicsWindowObserver(
+        observations: [
+            CoreGraphicsWindowObservation(
+                processIdentifier: 73,
+                windowNumber: 175,
+                frame: CGRect(x: 0, y: 34, width: 1_710, height: 987)
+            ),
+            CoreGraphicsWindowObservation(
+                processIdentifier: 74,
+                windowNumber: 176,
+                frame: CGRect(x: 20, y: 40, width: 800, height: 600)
+            ),
+        ]
+    )
+    let inventory = CoreGraphicsWindowInventory(observer: observer)
+
+    inventory.beginDiscoveryBatch()
+    #expect(inventory.observations(processIdentifier: 73).count == 1)
+    #expect(inventory.observations(processIdentifier: 74).count == 1)
+    inventory.endDiscoveryBatch()
+
+    #expect(observer.captureCount == 1)
+}
+
+@Test func coreGraphicsWindowIdentityRequiresOneMatchingProcessAndFrame() {
+    let expectedFrame = CGRect(x: 0, y: 34, width: 1_710, height: 987)
+    let observations = [
+        CoreGraphicsWindowObservation(
+            processIdentifier: 73,
+            windowNumber: 175,
+            frame: expectedFrame
+        ),
+        CoreGraphicsWindowObservation(
+            processIdentifier: 74,
+            windowNumber: 176,
+            frame: expectedFrame
+        ),
+        CoreGraphicsWindowObservation(
+            processIdentifier: 73,
+            windowNumber: 177,
+            frame: CGRect(x: 20, y: 40, width: 800, height: 600)
+        ),
+    ]
+
+    #expect(
+        CoreGraphicsWindowIdentityResolver.windowNumber(
+            processIdentifier: 73,
+            frame: expectedFrame,
+            observations: observations
+        ) == 175
+    )
+    #expect(
+        CoreGraphicsWindowIdentityResolver.windowNumber(
+            processIdentifier: 73,
+            frame: expectedFrame,
+            observations: observations + [
+                CoreGraphicsWindowObservation(
+                    processIdentifier: 73,
+                    windowNumber: 178,
+                    frame: expectedFrame
+                )
+            ]
+        ) == nil
+    )
+}
+
+@MainActor
 @Test func closedAndReopenedWindowReceivesANewIdentity() throws {
     let originalElement = AXUIElementCreateApplication(701)
     let reopenedElement = AXUIElementCreateApplication(702)
@@ -212,6 +280,62 @@ import Testing
 }
 
 @MainActor
+@Test func windowWithoutAXIdentifierReconnectsUsingCoreGraphicsWindowNumber() throws {
+    let application = ApplicationTarget(
+        displayName: "Chat",
+        bundleIdentifier: "com.example.chat",
+        processIdentifier: 74
+    )
+    let originalProvider = FakeAccessibilityWindowProvider(
+        descriptors: [
+            AccessibilityWindowDescriptor(
+                element: AXUIElementCreateApplication(741),
+                title: "Conversation",
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isModal: false,
+                isFocused: true,
+                parentElement: nil,
+                frame: CGRect(x: 0, y: 34, width: 1_710, height: 987),
+                coreGraphicsWindowNumber: 175
+            )
+        ]
+    )
+    let originalCatalog = AccessibilityWindowCatalog(provider: originalProvider)
+    let originalWindow = try #require(
+        originalCatalog.catalogueWindows(for: application).first
+    )
+    let exactReference = try #require(originalWindow.exactReference)
+
+    #expect(exactReference.accessibilityIdentifier == nil)
+    #expect(exactReference.coreGraphicsWindowNumber == 175)
+
+    let relaunchedCatalog = AccessibilityWindowCatalog(
+        provider: FakeAccessibilityWindowProvider(
+            descriptors: [
+                AccessibilityWindowDescriptor(
+                    element: AXUIElementCreateApplication(742),
+                    title: "Renamed conversation",
+                    role: "AXWindow",
+                    subrole: "AXStandardWindow",
+                    isModal: false,
+                    isFocused: true,
+                    parentElement: nil,
+                    frame: CGRect(x: 0, y: 34, width: 1_710, height: 987),
+                    coreGraphicsWindowNumber: 175
+                )
+            ]
+        ),
+        exactWindowReferences: [exactReference]
+    )
+    let reconnectedWindow = try #require(
+        relaunchedCatalog.loadWindows(for: application).first
+    )
+
+    #expect(reconnectedWindow.id == originalWindow.target.id)
+}
+
+@MainActor
 @Test func aDuplicatedAccessibilityIdentifierIsNotTreatedAsExactIdentity() throws {
     let persistedIdentifier = WindowIdentifier()
     let application = ApplicationTarget(
@@ -278,5 +402,19 @@ private final class FakeAccessibilityWindowProvider: AccessibilityWindowProvidin
 
     func windows(processIdentifier: Int32) throws -> [AccessibilityWindowDescriptor] {
         descriptors
+    }
+}
+
+private final class CountingCoreGraphicsWindowObserver: CoreGraphicsWindowObserving {
+    private let capturedObservations: [CoreGraphicsWindowObservation]
+    private(set) var captureCount = 0
+
+    init(observations: [CoreGraphicsWindowObservation]) {
+        capturedObservations = observations
+    }
+
+    func observations() -> [CoreGraphicsWindowObservation] {
+        captureCount += 1
+        return capturedObservations
     }
 }

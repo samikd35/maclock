@@ -3,6 +3,31 @@ import StayPaneCore
 import Testing
 @testable import StayPane
 
+@Test func exactWindowReferenceRejectsAmbiguousPersistedIdentity() throws {
+    let reference = ExactWindowReference(
+        windowIdentifier: WindowIdentifier(),
+        bundleIdentifier: "com.example.editor",
+        processIdentifier: 901,
+        accessibilityIdentifier: "window-901"
+    )
+    let encoded = try JSONEncoder().encode(reference)
+    var object = try #require(
+        JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    object["coreGraphicsWindowNumber"] = 901
+    let ambiguous = try JSONSerialization.data(withJSONObject: object)
+    object.removeValue(forKey: "accessibilityIdentifier")
+    object.removeValue(forKey: "coreGraphicsWindowNumber")
+    let missing = try JSONSerialization.data(withJSONObject: object)
+
+    #expect(throws: DecodingError.self) {
+        try JSONDecoder().decode(ExactWindowReference.self, from: ambiguous)
+    }
+    #expect(throws: DecodingError.self) {
+        try JSONDecoder().decode(ExactWindowReference.self, from: missing)
+    }
+}
+
 @MainActor
 @Test func windowEnforcementFileStoreRoundTripsAndClearsPlatformState() throws {
     let directory = FileManager.default.temporaryDirectory
@@ -20,7 +45,7 @@ import Testing
         windowIdentifier: WindowIdentifier(),
         bundleIdentifier: "com.example.reference",
         processIdentifier: 902,
-        accessibilityIdentifier: "changed-window-902"
+        coreGraphicsWindowNumber: 902
     )
     let snapshot = WindowEnforcementSnapshot(
         allowedWindowReferences: [allowedReference],

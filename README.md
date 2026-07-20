@@ -4,7 +4,7 @@ StayPane is a source-only macOS menu-bar focus timer. You choose one or more app
 
 StayPane is available under the [MIT License](LICENSE). Commercial and closed-source reuse is permitted, provided the copyright and license notice is preserved in copies or substantial portions of the software.
 
-StayPane targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Window discovery and hover outlines use Accessibility geometry only: Screen Recording permission is not required.
+StayPane targets Apple silicon running macOS 26 or newer. It uses SwiftUI, AppKit, and the macOS Accessibility API. Window discovery and hover outlines use Accessibility geometry. When an application omits a stable Accessibility window identifier, StayPane may correlate that geometry with public Core Graphics window-number metadata for Restoration. It never reads window pixels, and Screen Recording permission is not required.
 
 ## Build, verify, and run
 
