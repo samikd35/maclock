@@ -118,14 +118,19 @@ enum StatusPanelAccessibilityPresentation: Equatable {
 }
 
 enum StayPaneAccessibilityText {
+    static let targetRegionTitle = "What stays available"
+    static let targetRegionGuidance =
+        "Choose an Application Target (entire app), Window Target (one window), or Tab Target (one Chrome tab)."
     static let targetHierarchyRegion =
         "Allowed Targets. Choose at the Application, Window, Browser Window, or Tab level; broader selections disable redundant child choices."
     static let broadApplicationWarning =
-        "Broad Application Target warning: all current and future windows and content in each selected Application are allowed."
+        "Application Target (entire app): all current and future windows and all content in each selected application stay available. Choose a Window Target for narrower focus."
     static let broadChromeApplicationWarning =
-        "Broad Chrome Application Target warning: every current and future Chrome window, tab, and website is allowed."
+        "Application Targets keep all current and future windows and all content in every selected Application Target available. Chrome is selected as an Application Target, so every current and future Chrome window, tab, and website also stays available. To keep only one Tab Target, deselect Chrome, expand it, and select that tab after the Chrome companion is ready."
     static let broadChromeWindowWarning =
         "Broad Browser Window Target warning: every current and future tab and website in the selected Chrome window is allowed."
+    static let resetDurationAction = "Reset to 30m"
+    static let reviewAction = "Review & start"
     static let historyRegion =
         "Session History. Local records contain timing and result only, with no Target or browsing details."
     static let clearHistoryAction = "Clear all local Session History"

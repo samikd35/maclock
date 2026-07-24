@@ -180,6 +180,39 @@ import Testing
     )
 }
 
+@Test func incognitoRequirementExplainsTheBrowserSafetyBoundary() {
+    let profile = BrowserProfilePresentation(
+        profileIdentifier: BrowserProfileIdentifier(rawValue: "profile-one"),
+        availability: .incognitoWindowControlRequired
+    )
+
+    #expect(profile.statusTitle == "Unsupported — Incognito control required")
+    #expect(
+        profile.guidance
+            == "The Bridge Connection is active, but this Chrome Profile remains unsupported until you open StayPane details in chrome://extensions and enable Allow in Incognito. This lets StayPane block unmonitored Incognito windows; Incognito tabs cannot be selected as Tab Targets."
+    )
+}
+
+@Test func sessionSetupUsesPlainLanguageForBreadthAndNextAction() {
+    #expect(StayPaneAccessibilityText.targetRegionTitle == "What stays available")
+    #expect(
+        StayPaneAccessibilityText.targetRegionGuidance
+            == "Choose an Application Target (entire app), Window Target (one window), or Tab Target (one Chrome tab)."
+    )
+    #expect(
+        StayPaneAccessibilityText.broadChromeApplicationWarning.contains(
+            "every selected Application Target"
+        )
+    )
+    #expect(
+        StayPaneAccessibilityText.broadChromeApplicationWarning.contains(
+            "one Tab Target"
+        )
+    )
+    #expect(StayPaneAccessibilityText.resetDurationAction == "Reset to 30m")
+    #expect(StayPaneAccessibilityText.reviewAction == "Review & start")
+}
+
 @Test func visualAccessibilityPolicyHonorsMotionAndContrastPreferences() {
     #expect(
         VisualAccessibilityPolicy(

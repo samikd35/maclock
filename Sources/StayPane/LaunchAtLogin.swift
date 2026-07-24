@@ -9,6 +9,14 @@ enum LaunchAtLoginStatus: Equatable {
     case unavailable
 }
 
+struct LaunchAtLoginPresentation: Equatable {
+    let isOn: Bool
+    let isInteractive: Bool
+    let statusTitle: String
+    let guidance: String
+    let showsSettingsAction: Bool
+}
+
 @MainActor
 protocol LaunchAtLoginControlling: AnyObject {
     var status: LaunchAtLoginStatus { get }
@@ -85,17 +93,40 @@ final class LaunchAtLoginModel: ObservableObject {
         status == .enabled
     }
 
-    var recoveryLimitation: String? {
-        if !isEnabled {
-            return "StayPane cannot automatically resume an unfinished Session after login while Launch at Login is disabled."
-        }
+    var presentation: LaunchAtLoginPresentation {
         switch status {
         case .enabled:
-            return nil
+            LaunchAtLoginPresentation(
+                isOn: true,
+                isInteractive: true,
+                statusTitle: "Active",
+                guidance: "StayPane will open after login so it can recover an unfinished Session.",
+                showsSettingsAction: false
+            )
+        case .disabled:
+            LaunchAtLoginPresentation(
+                isOn: false,
+                isInteractive: true,
+                statusTitle: "Off",
+                guidance: "Turn this on if you want StayPane to recover an unfinished Session after login.",
+                showsSettingsAction: false
+            )
         case .requiresApproval:
-            return "Approve StayPane in System Settings → Login Items so unfinished Sessions can resume after login."
-        case .disabled, .unavailable:
-            return "Launch at Login is not currently available, so automatic Session Recovery after login is not guaranteed."
+            LaunchAtLoginPresentation(
+                isOn: true,
+                isInteractive: true,
+                statusTitle: "Approval required",
+                guidance: "Approve StayPane in System Settings → Login Items before relying on automatic Session Recovery.",
+                showsSettingsAction: true
+            )
+        case .unavailable:
+            LaunchAtLoginPresentation(
+                isOn: false,
+                isInteractive: false,
+                statusTitle: "Unavailable in this build",
+                guidance: "Open StayPane manually after login. Automatic Session Recovery after logout or restart is not available in this build.",
+                showsSettingsAction: false
+            )
         }
     }
 

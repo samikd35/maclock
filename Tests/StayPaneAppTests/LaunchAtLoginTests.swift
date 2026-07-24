@@ -20,7 +20,36 @@ import Testing
     #expect(model.isEnabled)
     #expect(model.isEffective)
     #expect(controller.requestedValues == [true])
-    #expect(model.recoveryLimitation == nil)
+    #expect(model.presentation.statusTitle == "Active")
+}
+
+@MainActor
+@Test func unavailableLaunchAtLoginNeverLooksEnabled() {
+    let defaults = launchAtLoginTestDefaults()
+    defer {
+        defaults.removePersistentDomain(
+            forName: defaultsSuiteName(defaults)
+        )
+    }
+    defaults.set(true, forKey: LaunchAtLoginModel.preferenceKey)
+    let controller = FakeLaunchAtLoginController(status: .unavailable)
+
+    let model = LaunchAtLoginModel(
+        defaults: defaults,
+        controller: controller
+    )
+
+    #expect(
+        model.presentation
+            == LaunchAtLoginPresentation(
+                isOn: false,
+                isInteractive: false,
+                statusTitle: "Unavailable in this build",
+                guidance: "Open StayPane manually after login. Automatic Session Recovery after logout or restart is not available in this build.",
+                showsSettingsAction: false
+            )
+    )
+    #expect(controller.requestedValues.isEmpty)
 }
 
 @MainActor
@@ -43,8 +72,8 @@ import Testing
     #expect(!model.isEffective)
     #expect(controller.requestedValues == [false])
     #expect(
-        model.recoveryLimitation
-            == "StayPane cannot automatically resume an unfinished Session after login while Launch at Login is disabled."
+        model.presentation.guidance
+            == "Turn this on if you want StayPane to recover an unfinished Session after login."
     )
 }
 

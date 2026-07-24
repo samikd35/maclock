@@ -70,8 +70,16 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
             interfaceModel.showNotice(
                 "The ⌃⌥⌘S shortcut is already in use, but the menu-bar panel remains available."
             )
-            panelController.showPanel()
         }
+        panelController.showPanel()
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        panelController?.showPanel()
+        return true
     }
 
     @objc

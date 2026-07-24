@@ -8,6 +8,10 @@ struct StayPaneMenuView: View {
     @ObservedObject var launchAtLoginModel: LaunchAtLoginModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @State private var customDurationExpanded = false
+    @State private var chromeSetupDetailsExpanded = false
+    @State private var secondarySettingsExpanded = false
+    @State private var applicationSearchText = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -141,23 +145,14 @@ struct StayPaneMenuView: View {
             chromeCompanionCard
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Focus duration")
-                    .font(.headline)
-                    .accessibilityAddTraits(.isHeader)
-
                 HStack {
-                    TextField("Seconds", value: $model.durationSeconds, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.updateDuration() }
-                        .onChange(of: model.durationSeconds) {
-                            model.updateDuration()
-                        }
-                    Text("seconds")
-                        .foregroundStyle(.secondary)
+                    Text("Focus duration")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    Text(model.formattedDuration)
+                        .font(.title2.monospacedDigit().weight(.semibold))
                 }
-
-                Text(model.formattedDuration)
-                    .font(.title2.monospacedDigit().weight(.semibold))
 
                 HStack {
                     ForEach([600, 1_500, 1_800, 3_600], id: \.self) { seconds in
@@ -167,11 +162,6 @@ struct StayPaneMenuView: View {
                         }
                         .buttonStyle(.bordered)
                     }
-                    Spacer()
-                    Button("Reset") {
-                        model.resetDurationToDefault()
-                    }
-                    .buttonStyle(.link)
                 }
 
                 if let message = model.durationValidationMessage {
@@ -179,7 +169,37 @@ struct StayPaneMenuView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 } else {
-                    Text("Allowed range: 10 seconds to 24 hours. Your last duration is remembered.")
+                    HStack {
+                        Text("Your last duration is remembered.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(StayPaneAccessibilityText.resetDurationAction) {
+                            model.resetDurationToDefault()
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+
+                DisclosureGroup(
+                    "Custom duration",
+                    isExpanded: $customDurationExpanded
+                ) {
+                    HStack {
+                        TextField(
+                            "Seconds",
+                            value: $model.durationSeconds,
+                            format: .number
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { model.updateDuration() }
+                        .onChange(of: model.durationSeconds) {
+                            model.updateDuration()
+                        }
+                        Text("seconds")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Advanced range: 10 seconds to 24 hours.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -187,7 +207,7 @@ struct StayPaneMenuView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Allowed targets")
+                    Text(StayPaneAccessibilityText.targetRegionTitle)
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
                     Spacer()
@@ -199,14 +219,24 @@ struct StayPaneMenuView: View {
                     .labelStyle(.iconOnly)
                     .help("Refresh running applications")
                 }
+                Text(StayPaneAccessibilityText.targetRegionGuidance)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField("Find an app", text: $applicationSearchText)
+                    .textFieldStyle(.roundedBorder)
 
                 if model.applications.isEmpty {
                     Text("No running applications found. Add an installed application instead.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if visibleApplications.isEmpty {
+                    Text("No applications match your search.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 7) {
-                        ForEach(model.applications, id: \.id) { application in
+                        ForEach(visibleApplications, id: \.id) { application in
                             applicationPickerRow(application)
                         }
                     }
@@ -219,11 +249,10 @@ struct StayPaneMenuView: View {
                 }
                 .buttonStyle(.bordered)
 
-                if !model.selectedApplicationIDs.isEmpty {
-                    broadApplicationWarning
-                }
                 if model.selectedApplicationIDs.contains("com.google.Chrome") {
                     broadChromeApplicationWarning
+                } else if !model.selectedApplicationIDs.isEmpty {
+                    broadApplicationWarning
                 }
                 if !model.selectedWindowIDs.isEmpty {
                     preciseWindowNote
@@ -240,26 +269,33 @@ struct StayPaneMenuView: View {
                 StayPaneAccessibilityText.targetHierarchyRegion
             )
 
-            floatingTimerSetupCard
-            launchAtLoginCard
-            historyAndDiagnosticsCard
+            restartRecoveryNotice
 
-            Button("Open Setup & Privacy Guide") {
-                model.showOnboarding()
-            }
-            .buttonStyle(.link)
-            .accessibilityHint(
-                "Reopens first-run guidance for Accessibility, privacy, and optional Chrome setup."
-            )
+            DisclosureGroup(
+                isExpanded: $secondarySettingsExpanded
+            ) {
+                VStack(alignment: .leading, spacing: 16) {
+                    floatingTimerSetupCard
+                    launchAtLoginCard
+                    historyAndDiagnosticsCard
 
-            Button("Review session") {
-                model.beginReview()
+                    Button("Open Setup & Privacy Guide") {
+                        model.showOnboarding()
+                    }
+                    .buttonStyle(.link)
+                    .accessibilityHint(
+                        "Reopens first-run guidance for Accessibility, privacy, and optional Chrome setup."
+                    )
+                }
+                .padding(.top, 8)
+            } label: {
+                Label(
+                    "Preferences, recovery & privacy",
+                    systemImage: "gearshape"
+                )
+                .font(.headline)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .disabled(!model.canReview)
+
         }
     }
 
@@ -307,8 +343,14 @@ struct StayPaneMenuView: View {
 
     private var chromeCompanionCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label("Chrome companion — optional", systemImage: "puzzlepiece.extension")
-                .font(.headline)
+            HStack {
+                Label("Chrome companion", systemImage: "puzzlepiece.extension")
+                    .font(.headline)
+                Spacer()
+                Text("Optional")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 12) {
                 Label(
@@ -337,42 +379,52 @@ struct StayPaneMenuView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.browserProfiles) { profile in
+                    let viewStyle = browserProfileViewStyle(
+                        profile.availability
+                    )
                     VStack(alignment: .leading, spacing: 2) {
                         Label(
-                            "\(model.browserProfileLabel(profile.profileIdentifier)): \(browserProfileStatus(profile.availability))",
-                            systemImage: browserProfileStatusImage(
-                                profile.availability
-                            )
+                            "\(model.browserProfileLabel(profile.profileIdentifier)): \(profile.statusTitle)",
+                            systemImage: viewStyle.systemImage
                         )
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(
-                            browserProfileStatusColor(profile.availability)
-                        )
-                        Text(browserProfileGuidance(profile.availability))
+                        .foregroundStyle(viewStyle.color)
+                        Text(profile.guidance)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
             }
 
-            Text("Skip Chrome for native Application Targets and Window Targets. Browser Window Targets and Tab Targets require local setup: register the Native Host, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
+            Text("Needed only for a Browser Window Target or Tab Target.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack {
-                Button(
-                    model.nativeHostRegistered
-                        ? "Repair Native Host Registration"
-                        : "Register Native Host"
-                ) {
-                    model.registerNativeHost()
-                }
-                .buttonStyle(.bordered)
+            DisclosureGroup(
+                "Setup and repair",
+                isExpanded: $chromeSetupDetailsExpanded
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Register the Native Host, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-                Button("Show Extension Folder") {
-                    model.openChromeExtensionFolder()
+                    HStack {
+                        Button(
+                            model.nativeHostRegistered
+                                ? "Repair Native Host"
+                                : "Register Native Host"
+                        ) {
+                            model.registerNativeHost()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Show Extension Folder") {
+                            model.openChromeExtensionFolder()
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
-                .buttonStyle(.bordered)
             }
         }
         .padding(10)
@@ -409,21 +461,16 @@ struct StayPaneMenuView: View {
                     title: model.browserProfileLabel(
                         profile.profileIdentifier
                     ),
-                    value: browserProfileStatus(profile.availability),
-                    systemImage: browserProfileStatusImage(
+                    value: profile.statusTitle,
+                    systemImage: browserProfileViewStyle(
                         profile.availability
-                    )
+                    ).systemImage
                 )
                 if profile.availability != .ready {
-                    Text(browserProfileGuidance(profile.availability))
+                    Text(profile.guidance)
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-            }
-            if model.configuredTargets.contains(where: {
-                targetPresentation($0).isBroadApplication
-            }) {
-                broadApplicationWarning
             }
             if model.configuredTargets.contains(where: {
                 guard case let .application(application) = $0 else {
@@ -434,6 +481,10 @@ struct StayPaneMenuView: View {
                 )
             }) {
                 broadChromeApplicationWarning
+            } else if model.configuredTargets.contains(where: {
+                targetPresentation($0).isBroadApplication
+            }) {
+                broadApplicationWarning
             }
             if model.configuredTargets.contains(where: {
                 if case .window = $0 { return true }
@@ -470,11 +521,12 @@ struct StayPaneMenuView: View {
             )
             reviewRow(
                 title: "Launch at Login",
-                value: launchAtLoginModel.isEffective ? "Enabled" : "Recovery limited",
+                value: launchAtLoginModel.presentation.statusTitle,
                 systemImage: launchAtLoginModel.isEffective
                     ? "checkmark.circle"
                     : "exclamationmark.triangle"
             )
+            restartRecoveryNotice
             reviewRow(
                 title: "Completion feedback",
                 value: "Status Panel and menu bar always; notifications optional",
@@ -802,27 +854,35 @@ struct StayPaneMenuView: View {
     }
 
     private var launchAtLoginCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Launch at Login", systemImage: "arrow.clockwise.circle")
-                .font(.headline)
+        let presentation = launchAtLoginModel.presentation
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Launch at Login", systemImage: "arrow.clockwise.circle")
+                    .font(.headline)
+                Spacer()
+                Text(presentation.statusTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(
+                        launchAtLoginStatusColor(launchAtLoginModel.status)
+                    )
+            }
             Toggle(
-                "Resume unfinished Sessions after login",
+                "Launch StayPane after login",
                 isOn: Binding(
-                    get: { launchAtLoginModel.isEnabled },
+                    get: { launchAtLoginModel.presentation.isOn },
                     set: { launchAtLoginModel.setEnabled($0) }
                 )
             )
             .toggleStyle(.switch)
+            .disabled(!presentation.isInteractive)
 
-            if let recoveryLimitation = launchAtLoginModel.recoveryLimitation {
-                Text(recoveryLimitation)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else {
-                Text("Enabled by default so logout and restart Recovery can begin automatically.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(presentation.guidance)
+                .font(.caption)
+                .foregroundStyle(
+                    launchAtLoginModel.status == .enabled
+                        ? Color.secondary
+                        : Color.orange
+                )
 
             if let errorMessage = launchAtLoginModel.errorMessage {
                 Text(errorMessage)
@@ -830,7 +890,7 @@ struct StayPaneMenuView: View {
                     .foregroundStyle(.red)
             }
 
-            if launchAtLoginModel.status == .requiresApproval {
+            if presentation.showsSettingsAction {
                 Button("Open Login Items Settings") {
                     launchAtLoginModel.openSystemSettings()
                 }
@@ -846,6 +906,19 @@ struct StayPaneMenuView: View {
         .accessibilityLabel("Launch at Login and Recovery")
         .onAppear {
             launchAtLoginModel.refresh()
+        }
+    }
+
+    private func launchAtLoginStatusColor(
+        _ status: LaunchAtLoginStatus
+    ) -> Color {
+        switch status {
+        case .enabled:
+            .green
+        case .disabled:
+            .secondary
+        case .requiresApproval, .unavailable:
+            .orange
         }
     }
 
@@ -950,7 +1023,7 @@ struct StayPaneMenuView: View {
 
     private var broadApplicationWarning: some View {
         Label(
-            "Application targets are broad. Every existing and future window—and all content inside each selected application—is allowed during the session.",
+            StayPaneAccessibilityText.broadApplicationWarning,
             systemImage: "exclamationmark.triangle.fill"
         )
         .font(.caption.weight(.medium))
@@ -995,7 +1068,7 @@ struct StayPaneMenuView: View {
 
     private var broadChromeApplicationWarning: some View {
         Label(
-            "Selecting Chrome as an Application Target allows every current and future Chrome window, tab, and website. Navigation Scopes do not apply.",
+            StayPaneAccessibilityText.broadChromeApplicationWarning,
             systemImage: "exclamationmark.triangle.fill"
         )
         .font(.caption.weight(.medium))
@@ -1108,17 +1181,20 @@ struct StayPaneMenuView: View {
     ) -> some View {
         Divider()
             .padding(.leading, 24)
-        Label("Chrome windows and tabs", systemImage: "rectangle.stack")
+        Label(
+            "Choose a Browser Window Target or Tab Target",
+            systemImage: "rectangle.stack"
+        )
             .font(.caption.weight(.semibold))
             .padding(.leading, 24)
 
         ForEach(model.browserProfiles) { profile in
             VStack(alignment: .leading, spacing: 1) {
                 Text(
-                    "\(model.browserProfileLabel(profile.profileIdentifier)) — \(browserProfileStatus(profile.availability))"
+                    "\(model.browserProfileLabel(profile.profileIdentifier)) — \(profile.statusTitle)"
                 )
                 .font(.caption.weight(.medium))
-                Text(browserProfileGuidance(profile.availability))
+                Text(profile.guidance)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1289,11 +1365,18 @@ struct StayPaneMenuView: View {
                     .frame(width: 22, height: 22)
                 Text(application.target.displayName)
                 Spacer()
-                Text(applicationStatus(application))
-                    .font(.caption2)
-                    .foregroundStyle(
-                        application.isAvailable ? Color.secondary : Color.red
-                    )
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(applicationStatus(application))
+                        .font(.caption2)
+                        .foregroundStyle(
+                            application.isAvailable ? Color.secondary : Color.red
+                        )
+                    if model.selectedApplicationIDs.contains(application.id) {
+                        Text("Application Target")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                }
             }
         }
         .toggleStyle(.checkbox)
@@ -1310,62 +1393,36 @@ struct StayPaneMenuView: View {
         return application.isAvailable ? "Installed" : "Unavailable"
     }
 
-    private func browserProfileStatus(
+    private func browserProfileViewStyle(
         _ availability: BrowserProfilePresentationAvailability
-    ) -> String {
+    ) -> BrowserProfileViewStyle {
         switch availability {
         case .synchronizing:
-            "Synchronizing"
+            BrowserProfileViewStyle(
+                systemImage: "arrow.triangle.2.circlepath",
+                color: .secondary
+            )
         case .ready:
-            "Ready"
+            BrowserProfileViewStyle(
+                systemImage: "checkmark.circle.fill",
+                color: .green
+            )
         case .disconnected:
-            "Disconnected"
+            BrowserProfileViewStyle(
+                systemImage: "link.badge.plus",
+                color: .orange
+            )
         case .incognitoWindowControlRequired:
-            "Unsupported until Incognito control is enabled"
+            BrowserProfileViewStyle(
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange
+            )
         }
     }
 
-    private func browserProfileGuidance(
-        _ availability: BrowserProfilePresentationAvailability
-    ) -> String {
-        switch availability {
-        case .synchronizing:
-            "The connection is verified. StayPane is waiting for this profile's current windows and tabs."
-        case .ready:
-            "Extension identity, Native Bridge, and Incognito-window control are verified."
-        case .disconnected:
-            "Open this Chrome Profile with the StayPane companion enabled, then reconnect before starting."
-        case .incognitoWindowControlRequired:
-            "In chrome://extensions, open StayPane details and enable Allow in Incognito. Incognito tabs remain unselectable."
-        }
-    }
-
-    private func browserProfileStatusImage(
-        _ availability: BrowserProfilePresentationAvailability
-    ) -> String {
-        switch availability {
-        case .synchronizing:
-            "arrow.triangle.2.circlepath"
-        case .ready:
-            "checkmark.circle.fill"
-        case .disconnected:
-            "link.badge.plus"
-        case .incognitoWindowControlRequired:
-            "exclamationmark.triangle.fill"
-        }
-    }
-
-    private func browserProfileStatusColor(
-        _ availability: BrowserProfilePresentationAvailability
-    ) -> Color {
-        switch availability {
-        case .ready:
-            .green
-        case .synchronizing:
-            .secondary
-        case .disconnected, .incognitoWindowControlRequired:
-            .orange
-        }
+    private struct BrowserProfileViewStyle {
+        let systemImage: String
+        let color: Color
     }
 
     private func targetNames(_ targets: [SessionTarget]) -> String {
@@ -1481,6 +1538,24 @@ struct StayPaneMenuView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
+            if showsSetupReviewAction {
+                HStack {
+                    Text(
+                        model.canReview
+                            ? "Ready for final review"
+                            : "Choose a duration and at least one Target"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(StayPaneAccessibilityText.reviewAction) {
+                        model.beginReview()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!model.canReview)
+                }
+            }
             HStack {
                 Text("⌃⌥⌘S opens StayPane")
                     .font(.caption2)
@@ -1505,6 +1580,57 @@ struct StayPaneMenuView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+    }
+
+    private var visibleApplications: [ApplicationCatalogItem] {
+        let trimmedSearch = applicationSearchText.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let matchingApplications = model.applications.filter { application in
+            trimmedSearch.isEmpty
+                || model.selectedApplicationIDs.contains(application.id)
+                || application.target.displayName.localizedCaseInsensitiveContains(
+                    trimmedSearch
+                )
+        }
+        return matchingApplications.sorted { first, second in
+            let firstIsSelected = model.selectedApplicationIDs.contains(first.id)
+            let secondIsSelected = model.selectedApplicationIDs.contains(second.id)
+            if firstIsSelected != secondIsSelected {
+                return firstIsSelected
+            }
+            return first.target.displayName.localizedCaseInsensitiveCompare(
+                second.target.displayName
+            ) == .orderedAscending
+        }
+    }
+
+    private var showsSetupReviewAction: Bool {
+        guard !model.shouldPresentOnboarding, !model.isReviewing else {
+            return false
+        }
+        switch model.state {
+        case .idle, .configuring, .ready:
+            return true
+        case .starting, .recovering, .enforcing, .resetPending,
+             .completed, .endedEarly, .interrupted:
+            return false
+        }
+    }
+
+    @ViewBuilder
+    private var restartRecoveryNotice: some View {
+        if launchAtLoginModel.status != .enabled {
+            Label(
+                launchAtLoginModel.presentation.guidance,
+                systemImage: "exclamationmark.arrow.triangle.2.circlepath"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .accessibilityLabel(
+                "Launch at Login, \(launchAtLoginModel.presentation.statusTitle). \(launchAtLoginModel.presentation.guidance)"
+            )
+        }
     }
 
     private var countdownContentTransition: ContentTransition {

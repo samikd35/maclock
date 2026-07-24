@@ -17,6 +17,44 @@ struct BrowserProfilePresentation: Equatable, Identifiable {
     let availability: BrowserProfilePresentationAvailability
 
     var id: BrowserProfileIdentifier { profileIdentifier }
+
+    var integrationStatePresentation: BrowserProfileIntegrationStatePresentation {
+        switch availability {
+        case .synchronizing:
+            BrowserProfileIntegrationStatePresentation(
+                statusTitle: "Synchronizing",
+                guidance: "The connection is verified. StayPane is waiting for this Chrome Profile's current windows and tabs."
+            )
+        case .ready:
+            BrowserProfileIntegrationStatePresentation(
+                statusTitle: "Ready",
+                guidance: "Extension identity, Native Bridge, and Incognito-window control are verified."
+            )
+        case .disconnected:
+            BrowserProfileIntegrationStatePresentation(
+                statusTitle: "Disconnected",
+                guidance: "Open this Chrome Profile with the StayPane companion enabled, then reconnect before starting."
+            )
+        case .incognitoWindowControlRequired:
+            BrowserProfileIntegrationStatePresentation(
+                statusTitle: "Unsupported — Incognito control required",
+                guidance: "The Bridge Connection is active, but this Chrome Profile remains unsupported until you open StayPane details in chrome://extensions and enable Allow in Incognito. This lets StayPane block unmonitored Incognito windows; Incognito tabs cannot be selected as Tab Targets."
+            )
+        }
+    }
+
+    var statusTitle: String {
+        integrationStatePresentation.statusTitle
+    }
+
+    var guidance: String {
+        integrationStatePresentation.guidance
+    }
+}
+
+struct BrowserProfileIntegrationStatePresentation: Equatable {
+    let statusTitle: String
+    let guidance: String
 }
 
 @MainActor
