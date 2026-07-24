@@ -113,6 +113,8 @@ import Testing
         client: client
     )
 
+    #expect(!workflow.canDismissOnboarding)
+
     workflow.requestAccess()
     #expect(client.requestCount == 1)
     #expect(client.openSettingsCount == 1)
@@ -141,6 +143,7 @@ import Testing
     )
     #expect(workflow.complete(checklist))
     #expect(workflow.progress.isCompleted)
+    #expect(workflow.canDismissOnboarding)
 
     client.isGranted = false
     let revoked = workflow.verify(

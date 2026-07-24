@@ -427,6 +427,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
     }
 
+    var canDismissOnboarding: Bool {
+        onboardingWorkflow.canDismissOnboarding
+    }
+
     var statusPanelAccessibilityPresentation:
         StatusPanelAccessibilityPresentation
     {
@@ -937,6 +941,13 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     func showOnboarding() {
         isOnboardingPresented = true
+    }
+
+    func dismissOnboarding() {
+        guard canDismissOnboarding else {
+            return
+        }
+        isOnboardingPresented = false
     }
 
     func beginReview() {

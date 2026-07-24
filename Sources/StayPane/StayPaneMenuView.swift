@@ -9,7 +9,7 @@ struct StayPaneMenuView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var customDurationExpanded = false
-    @State private var chromeSetupDetailsExpanded = false
+    @State private var chromeCompanionExpanded = false
     @State private var secondarySettingsExpanded = false
     @State private var applicationSearchText = ""
 
@@ -142,8 +142,6 @@ struct StayPaneMenuView: View {
                     .foregroundStyle(.green)
             }
 
-            chromeCompanionCard
-
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Focus duration")
@@ -269,6 +267,8 @@ struct StayPaneMenuView: View {
                 StayPaneAccessibilityText.targetHierarchyRegion
             )
 
+            chromeCompanionCard
+
             restartRecoveryNotice
 
             DisclosureGroup(
@@ -279,7 +279,7 @@ struct StayPaneMenuView: View {
                     launchAtLoginCard
                     historyAndDiagnosticsCard
 
-                    Button("Open Setup & Privacy Guide") {
+                    Button("Open First-Run Onboarding") {
                         model.showOnboarding()
                     }
                     .buttonStyle(.link)
@@ -301,26 +301,29 @@ struct StayPaneMenuView: View {
 
     private var accessibilityCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Accessibility permission", systemImage: "hand.raised.fill")
-                .font(.headline)
-            Text("StayPane uses macOS Accessibility to see, minimize, restore, and refocus app windows during a Session. It may correlate window geometry with a public Core Graphics window number when an app omits a stable Accessibility identifier. It never reads window pixels, quits apps, or needs Screen Recording.")
-                .font(.subheadline)
-            Text("After granting access in System Settings, return here. StayPane verifies it automatically before enabling Start.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Label(
-                model.accessibilitySetupState.title,
-                systemImage: model.accessibilityGranted
-                    ? "checkmark.seal.fill"
-                    : "exclamationmark.triangle.fill"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(model.accessibilityGranted ? .green : .orange)
-            Text(model.accessibilitySetupState.guidance)
-                .font(.caption)
-                .foregroundStyle(.secondary)
             HStack {
-                Button("Request Access & Open Settings") {
+                Label(
+                    "Accessibility",
+                    systemImage: "hand.raised.fill"
+                )
+                .font(.headline)
+                Spacer()
+                Label(
+                    model.accessibilitySetupState.title,
+                    systemImage: model.accessibilityGranted
+                        ? "checkmark.seal.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(
+                    model.accessibilityGranted ? .green : .orange
+                )
+                .accessibilityHint(
+                    model.accessibilitySetupState.guidance
+                )
+            }
+            HStack {
+                Button("Open Settings") {
                     model.requestAccessibilityAccess()
                 }
                 .buttonStyle(.borderedProminent)
@@ -328,6 +331,18 @@ struct StayPaneMenuView: View {
                     model.refreshAccessibilityStatus()
                 }
                 .buttonStyle(.bordered)
+                Spacer()
+                Button {
+                    model.showOnboarding()
+                } label: {
+                    Label(
+                        "Accessibility instructions",
+                        systemImage: "questionmark.circle"
+                    )
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .help("Open Accessibility instructions in First-Run Onboarding")
             }
         }
         .padding(12)
@@ -339,92 +354,106 @@ struct StayPaneMenuView: View {
         .accessibilityLabel(
             "Accessibility permission, \(model.accessibilitySetupState.title)"
         )
+        .accessibilityHint(
+            "\(model.accessibilitySetupState.guidance) Open First-Run Onboarding for full instructions."
+        )
     }
 
     private var chromeCompanionCard: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Label("Chrome companion", systemImage: "puzzlepiece.extension")
-                    .font(.headline)
-                Spacer()
-                Text("Optional")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+        DisclosureGroup(
+            isExpanded: $chromeCompanionExpanded
+        ) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 12) {
+                    Label(
+                        model.nativeHostRegistered
+                            ? "Native Host registered"
+                            : "Native Host not registered",
+                        systemImage: model.nativeHostRegistered
+                            ? "checkmark.circle.fill"
+                            : "exclamationmark.circle"
+                    )
+                    .foregroundStyle(
+                        model.nativeHostRegistered ? .green : .orange
+                    )
 
-            HStack(spacing: 12) {
-                Label(
-                    model.nativeHostRegistered
-                        ? "Native Host registered"
-                        : "Native Host not registered",
-                    systemImage: model.nativeHostRegistered
-                        ? "checkmark.circle.fill"
-                        : "exclamationmark.circle"
-                )
-                .foregroundStyle(model.nativeHostRegistered ? .green : .orange)
+                    Label(
+                        model.nativeBridgeConnected
+                            ? "Connected"
+                            : "Disconnected",
+                        systemImage: model.nativeBridgeConnected
+                            ? "link.circle.fill"
+                            : "link.badge.plus"
+                    )
+                    .foregroundStyle(
+                        model.nativeBridgeConnected
+                            ? .green
+                            : .secondary
+                    )
+                }
+                .font(.caption.weight(.medium))
 
-                Label(
-                    model.nativeBridgeConnected ? "Connected" : "Disconnected",
-                    systemImage: model.nativeBridgeConnected
-                        ? "link.circle.fill"
-                        : "link.badge.plus"
-                )
-                .foregroundStyle(model.nativeBridgeConnected ? .green : .secondary)
-            }
-            .font(.caption.weight(.medium))
-
-            if model.browserProfiles.isEmpty {
-                Text("No Chrome Profile has a Bridge Connection.")
+                if model.browserProfiles.isEmpty {
+                    Label(
+                        "No Chrome Profile connected",
+                        systemImage: "person.crop.circle.badge.questionmark"
+                    )
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(model.browserProfiles) { profile in
-                    let viewStyle = browserProfileViewStyle(
-                        profile.availability
-                    )
-                    VStack(alignment: .leading, spacing: 2) {
+                } else {
+                    ForEach(model.browserProfiles) { profile in
+                        let viewStyle = browserProfileViewStyle(
+                            profile.availability
+                        )
                         Label(
                             "\(model.browserProfileLabel(profile.profileIdentifier)): \(profile.statusTitle)",
                             systemImage: viewStyle.systemImage
                         )
                         .font(.caption.weight(.medium))
                         .foregroundStyle(viewStyle.color)
-                        Text(profile.guidance)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
                     }
                 }
+
+                HStack {
+                    Button("Instructions") {
+                        model.showOnboarding()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel(
+                        "Open First-Run Onboarding for Chrome instructions"
+                    )
+                    .help("Open Chrome instructions in First-Run Onboarding")
+
+                    Button(
+                        model.nativeHostRegistered
+                            ? "Repair Native Host"
+                            : "Register Native Host"
+                    ) {
+                        model.registerNativeHost()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button("Show Extension Folder") {
+                    model.openChromeExtensionFolder()
+                }
+                .buttonStyle(.link)
             }
-
-            Text("Needed only for a Browser Window Target or Tab Target.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            DisclosureGroup(
-                "Setup and repair",
-                isExpanded: $chromeSetupDetailsExpanded
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Register the Native Host, then open chrome://extensions, enable Developer mode, and Load unpacked from the built extension folder. No Chrome Web Store account is required.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        Button(
-                            model.nativeHostRegistered
-                                ? "Repair Native Host"
-                                : "Register Native Host"
-                        ) {
-                            model.registerNativeHost()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Show Extension Folder") {
-                            model.openChromeExtensionFolder()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
+            .padding(.top, 8)
+        } label: {
+            HStack {
+                Label(
+                    "Chrome companion — optional",
+                    systemImage: "puzzlepiece.extension"
+                )
+                .font(.headline)
+                Spacer()
+                Image(
+                    systemName: chromeCompanionSummaryStyle.systemImage
+                )
+                .foregroundStyle(chromeCompanionSummaryStyle.color)
+                .help(model.chromeSetupState.title)
+                .accessibilityLabel(model.chromeSetupState.title)
             }
         }
         .padding(10)
@@ -433,7 +462,12 @@ struct StayPaneMenuView: View {
             in: RoundedRectangle(cornerRadius: 8)
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Optional Chrome companion setup")
+        .accessibilityLabel(
+            "Optional Chrome companion, \(model.chromeSetupState.title)"
+        )
+        .accessibilityHint(
+            "Expand for connection status and setup actions. Open First-Run Onboarding for full instructions."
+        )
     }
 
     private var reviewView: some View {
@@ -1391,6 +1425,36 @@ struct StayPaneMenuView: View {
             return "Running"
         }
         return application.isAvailable ? "Installed" : "Unavailable"
+    }
+
+    private var chromeCompanionSummaryStyle: BrowserProfileViewStyle {
+        switch model.chromeSetupState {
+        case .ready:
+            BrowserProfileViewStyle(
+                systemImage: "checkmark.circle.fill",
+                color: .green
+            )
+        case .synchronizing:
+            BrowserProfileViewStyle(
+                systemImage: "arrow.triangle.2.circlepath",
+                color: .blue
+            )
+        case .nativeHostNotRegistered:
+            BrowserProfileViewStyle(
+                systemImage: "circle.dashed",
+                color: .secondary
+            )
+        case .waitingForProfileConnection:
+            BrowserProfileViewStyle(
+                systemImage: "link.badge.plus",
+                color: .secondary
+            )
+        case .nativeBridgeUnavailable, .connectedProfileNeedsAttention:
+            BrowserProfileViewStyle(
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange
+            )
+        }
     }
 
     private func browserProfileViewStyle(

@@ -59,6 +59,10 @@ struct AccessibilityOnboardingWorkflow {
         progressStore.load()
     }
 
+    var canDismissOnboarding: Bool {
+        progress.isCompleted
+    }
+
     func requestAccess() {
         progressStore.markAccessibilityRequested()
         client.requestAccess()

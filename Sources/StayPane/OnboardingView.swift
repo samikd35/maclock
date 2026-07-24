@@ -29,19 +29,29 @@ struct OnboardingView: View {
             notificationAndFocusGuidance
                 .accessibilitySortPriority(1)
 
-            Button("Continue to Session Setup") {
-                model.finishOnboarding()
+            HStack {
+                if model.canDismissOnboarding {
+                    Button("Back to Session Setup") {
+                        model.dismissOnboarding()
+                    }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+                }
+                Spacer()
+                Button("Continue to Session Setup") {
+                    model.finishOnboarding()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.onboardingChecklist.canFinish)
+                .accessibilityHint(
+                    model.onboardingChecklist.canFinish
+                        ? "Closes the first-run checklist."
+                        : "First verify Accessibility using the harmless window-control test."
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .disabled(!model.onboardingChecklist.canFinish)
-            .accessibilityHint(
-                model.onboardingChecklist.canFinish
-                    ? "Closes the first-run checklist."
-                    : "First verify Accessibility using the harmless window-control test."
-            )
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("StayPane first-run onboarding")
