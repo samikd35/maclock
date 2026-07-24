@@ -52,6 +52,9 @@ protocol WorkspaceApplicationAccessing: AnyObject {
     var runningApplicationSnapshots: [WorkspaceApplicationSnapshot] { get }
     var frontmostProcessIdentifier: Int32? { get }
     func application(processIdentifier: Int32) -> NSRunningApplication?
+    func applicationSnapshot(
+        processIdentifier: Int32
+    ) -> WorkspaceApplicationSnapshot?
     func runningApplications(bundleIdentifier: String) -> [NSRunningApplication]
 }
 
@@ -62,6 +65,13 @@ extension WorkspaceApplicationAccessing {
 
     var frontmostProcessIdentifier: Int32? {
         frontmostApplication?.processIdentifier
+    }
+
+    func applicationSnapshot(
+        processIdentifier: Int32
+    ) -> WorkspaceApplicationSnapshot? {
+        application(processIdentifier: processIdentifier)
+            .flatMap(WorkspaceApplicationSnapshot.init)
     }
 }
 
@@ -77,6 +87,26 @@ final class SystemWorkspaceApplicationAccess: WorkspaceApplicationAccessing {
 
     func application(processIdentifier: Int32) -> NSRunningApplication? {
         NSRunningApplication(processIdentifier: processIdentifier)
+    }
+
+    func applicationSnapshot(
+        processIdentifier: Int32
+    ) -> WorkspaceApplicationSnapshot? {
+        guard
+            let application = application(
+                processIdentifier: processIdentifier
+            ),
+            !application.isTerminated,
+            let bundleIdentifier = application.bundleIdentifier
+        else {
+            return nil
+        }
+        return WorkspaceApplicationSnapshot(
+            displayName: application.localizedName ?? "Application",
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: application.processIdentifier,
+            applicationURL: application.bundleURL
+        )
     }
 
     func runningApplications(

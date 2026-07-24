@@ -47,9 +47,16 @@ import Testing
         processIdentifier: 902,
         coreGraphicsWindowNumber: 902
     )
+    let pendingReference = ExactWindowReference(
+        windowIdentifier: WindowIdentifier(),
+        bundleIdentifier: "com.example.pending",
+        processIdentifier: 903,
+        coreGraphicsWindowNumber: 903
+    )
     let snapshot = WindowEnforcementSnapshot(
         allowedWindowReferences: [allowedReference],
-        restorationReferences: [restorationReference]
+        restorationReferences: [restorationReference],
+        pendingMutationReference: pendingReference
     )
 
     try store.save(snapshot)
@@ -58,4 +65,24 @@ import Testing
     try store.clear()
     #expect(try store.load() == nil)
     try? FileManager.default.removeItem(at: directory)
+}
+
+@Test func legacyWindowEnforcementSnapshotDefaultsToNoPendingMutation() throws {
+    let snapshot = WindowEnforcementSnapshot(
+        allowedWindowReferences: [],
+        restorationReferences: []
+    )
+    let encoded = try JSONEncoder().encode(snapshot)
+    var object = try #require(
+        JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    object.removeValue(forKey: "pendingMutationReference")
+    let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+    let decoded = try JSONDecoder().decode(
+        WindowEnforcementSnapshot.self,
+        from: legacyData
+    )
+
+    #expect(decoded.pendingMutationReference == nil)
 }

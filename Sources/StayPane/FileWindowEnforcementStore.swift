@@ -3,9 +3,22 @@ import Foundation
 struct WindowEnforcementSnapshot: Codable, Equatable, Sendable {
     let allowedWindowReferences: [ExactWindowReference]
     let restorationReferences: [ExactWindowReference]
+    let pendingMutationReference: ExactWindowReference?
+
+    init(
+        allowedWindowReferences: [ExactWindowReference],
+        restorationReferences: [ExactWindowReference],
+        pendingMutationReference: ExactWindowReference? = nil
+    ) {
+        self.allowedWindowReferences = allowedWindowReferences
+        self.restorationReferences = restorationReferences
+        self.pendingMutationReference = pendingMutationReference
+    }
 
     var isEmpty: Bool {
-        allowedWindowReferences.isEmpty && restorationReferences.isEmpty
+        allowedWindowReferences.isEmpty
+            && restorationReferences.isEmpty
+            && pendingMutationReference == nil
     }
 }
 

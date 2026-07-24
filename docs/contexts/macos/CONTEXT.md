@@ -24,6 +24,9 @@ _Avoid_: Closed app, forbidden process
 Returning only windows minimized by StayPane to their prior non-minimized state when enforcement stops.
 _Avoid_: Reopen, workspace reset
 
+**Unconfirmed Window Mutation**:
+A single write-ahead record showing that StayPane was interrupted while changing a window, before the successful change could be confirmed locally. Recovery does not reveal this uncertain window automatically; it clears the record and tells the user to restore the window manually if needed.
+
 **Status Panel**:
 The native StayPane interface that presents setup while idle and immutable Session status while enforcement is active.
 _Avoid_: Popup, dashboard, setup window

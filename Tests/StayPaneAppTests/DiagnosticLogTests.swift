@@ -91,6 +91,25 @@ import Testing
 }
 
 @MainActor
+@Test func diagnosticLogStoresOnlyTheSafeSessionStartFailureCode() throws {
+    let directory = TemporaryTestDirectory(
+        named: "StayPaneDiagnosticFailureCodeTests"
+    )
+    defer { directory.remove() }
+    let log = DiagnosticLog(
+        fileURL: directory.url.appendingPathComponent("diagnostics.json")
+    )
+
+    try log.record(
+        .sessionStartFailed,
+        detail: .failure(.windowIdentityUnavailable)
+    )
+
+    let entry = try #require(log.load().first)
+    #expect(entry.details == "failure: windowIdentityUnavailable")
+}
+
+@MainActor
 @Test func explicitDiagnosticsExportCreatesInspectableLocalArtifact() throws {
     let directory = TemporaryTestDirectory(
         named: "StayPaneDiagnosticExportTests"

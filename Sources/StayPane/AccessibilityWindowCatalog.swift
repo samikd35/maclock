@@ -383,14 +383,24 @@ final class AccessibilityWindowCatalog {
                 application.displayName
             )
         }
-        let descriptors: [AccessibilityWindowDescriptor]
+        let discoveredDescriptors: [AccessibilityWindowDescriptor]
         do {
-            descriptors = try provider.windows(processIdentifier: processIdentifier)
+            discoveredDescriptors = try provider.windows(
+                processIdentifier: processIdentifier
+            )
         } catch {
             throw AccessibilityWindowCatalogError.discoveryFailed(
                 application.displayName
             )
         }
+        let descriptors = discoveredDescriptors.filter(
+            {
+                Self.isEnforcementWindowDescriptor(
+                    $0,
+                    bundleIdentifier: application.bundleIdentifier
+                )
+            }
+        )
 
         latestProcessIdentifiers
             .filter { $0.value == processIdentifier }
@@ -618,6 +628,14 @@ final class AccessibilityWindowCatalog {
 
     static func isEssentialSystemApplication(bundleIdentifier: String) -> Bool {
         essentialSystemBundleIdentifiers.contains(bundleIdentifier)
+    }
+
+    private static func isEnforcementWindowDescriptor(
+        _ descriptor: AccessibilityWindowDescriptor,
+        bundleIdentifier: String
+    ) -> Bool {
+        !(bundleIdentifier == "com.apple.finder"
+            && descriptor.role == "AXScrollArea")
     }
 
     private static let essentialSystemBundleIdentifiers: Set<String> = [

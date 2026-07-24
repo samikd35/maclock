@@ -57,6 +57,11 @@ struct BrowserProfileIntegrationStatePresentation: Equatable {
     let guidance: String
 }
 
+struct StayPaneNoticePresentation: Equatable {
+    let message: String
+    let isPersistent: Bool
+}
+
 @MainActor
 final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandling {
     static let lastDurationKey = "lastSessionDurationSeconds"
@@ -111,6 +116,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private var quitCoordinator = QuitCoordinator()
     private var addedApplicationIDs: Set<String> = []
     private var hasCompletedInitialSynchronization = false
+    private var unconfirmedWindowMutationMessage: String?
+
+    private static let unconfirmedWindowMutationGuidance =
+        "Unconfirmed Window Mutation: StayPane was interrupted while changing one window. It did not reveal that uncertain window; restore it manually if needed."
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -187,6 +196,15 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         enforcement.onRestorationRecovered = { [weak self] in
             self?.recordDiagnostic(.restorationRecovered)
             self?.showNotice("No pending window restorations remain.")
+        }
+        enforcement.onUnconfirmedWindowMutation = { [weak self] in
+            guard let self else {
+                return
+            }
+            recordDiagnostic(.unconfirmedWindowMutation)
+            unconfirmedWindowMutationMessage =
+                Self.unconfirmedWindowMutationGuidance
+            showPersistentNotice(Self.unconfirmedWindowMutationGuidance)
         }
         nativeBridge?.onChange = { [weak self] in
             self?.synchronizeBrowserPresentation()
@@ -270,8 +288,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         try? nativeBridge?.poll()
         synchronizeBrowserPresentation()
         refreshNativeHostRegistrationStatus()
-        if let startupNotice {
-            showNotice(startupNotice)
+        if let presentation = Self.noticePresentation(
+            primaryMessage: startupNotice,
+            unconfirmedWindowMutationMessage:
+                unconfirmedWindowMutationMessage
+        ) {
+            presentNotice(presentation)
         }
 
         let timer = Timer(
@@ -951,6 +973,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func beginReview() {
+        clearNotice()
         refreshAccessibilityStatus()
         updateDuration()
         refreshApplications()
@@ -1005,6 +1028,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func startCountdown() {
+        clearNotice()
         refreshAccessibilityStatus()
         guard accessibilityGranted else {
             isReviewing = false
@@ -1104,6 +1128,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func startAnotherSession() {
+        clearNotice()
         engine.beginConfiguration(duration: currentValidDuration())
         selectedTargetIDs = []
         isReviewing = false
@@ -1180,10 +1205,21 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 failOpen(after: error)
                 return
             }
-            recordDiagnostic(.sessionStartFailed)
+            recordDiagnostic(
+                .sessionStartFailed,
+                detail: .failure(diagnosticFailureCode(for: error))
+            )
             isReviewing = false
             refreshApplications()
-            showNotice(error.localizedDescription)
+            let presentation = Self.noticePresentation(
+                primaryMessage:
+                    "Session did not start. \(error.localizedDescription)",
+                unconfirmedWindowMutationMessage:
+                    unconfirmedWindowMutationMessage
+            )
+            if let presentation {
+                showPersistentNotice(presentation.message)
+            }
         }
         synchronizeWithEngine()
         continueDeferredQuitAfterRecovery()
@@ -1207,6 +1243,16 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func showNotice(_ message: String) {
+        if let presentation = Self.noticePresentation(
+            primaryMessage: message,
+            unconfirmedWindowMutationMessage:
+                unconfirmedWindowMutationMessage
+        ),
+        presentation.isPersistent
+        {
+            presentNotice(presentation)
+            return
+        }
         notice = message
         noticeTask?.cancel()
         noticeTask = Task { [weak self] in
@@ -1215,6 +1261,50 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
                 return
             }
             self?.notice = nil
+        }
+    }
+
+    private func showPersistentNotice(_ message: String) {
+        noticeTask?.cancel()
+        noticeTask = nil
+        notice = message
+    }
+
+    private func clearNotice() {
+        noticeTask?.cancel()
+        noticeTask = nil
+        notice = nil
+        unconfirmedWindowMutationMessage = nil
+    }
+
+    nonisolated static func noticePresentation(
+        primaryMessage: String?,
+        unconfirmedWindowMutationMessage: String?
+    ) -> StayPaneNoticePresentation? {
+        let candidateMessages: [String?] = [
+            primaryMessage,
+            unconfirmedWindowMutationMessage
+        ]
+        let messages: [String] = candidateMessages.compactMap { message in
+            guard let message, !message.isEmpty else {
+                return nil
+            }
+            return message
+        }
+        guard !messages.isEmpty else {
+            return nil
+        }
+        return StayPaneNoticePresentation(
+            message: messages.joined(separator: " "),
+            isPersistent: unconfirmedWindowMutationMessage != nil
+        )
+    }
+
+    private func presentNotice(_ presentation: StayPaneNoticePresentation) {
+        if presentation.isPersistent {
+            showPersistentNotice(presentation.message)
+        } else {
+            showNotice(presentation.message)
         }
     }
 
@@ -1336,6 +1426,18 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         detail: DiagnosticDetail? = nil
     ) {
         try? diagnosticLog.record(event, detail: detail)
+    }
+
+    private func diagnosticFailureCode(
+        for error: Error
+    ) -> DiagnosticFailureCode {
+        if let enforcementError = error as? ApplicationEnforcementError {
+            return enforcementError.diagnosticFailureCode
+        }
+        if error is BrowserEnforcementError {
+            return .browserUnavailable
+        }
+        return .unknown
     }
 
     private func refreshExpandedWindowListsIfEditable() {

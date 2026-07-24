@@ -10,7 +10,10 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
     case allowedWindowsUnavailable([String])
     case windowRestorationPending(Int)
     case exactWindowIdentityUnavailable([String])
-    case windowRestorationUnavailable(String)
+    case windowRestorationUnavailable(
+        applicationName: String,
+        windowTitle: String
+    )
     case windowEnforcementPersistenceUnavailable
 
     var errorDescription: String? {
@@ -27,10 +30,31 @@ enum ApplicationEnforcementError: LocalizedError, Equatable {
             "StayPane is still restoring \(count) window(s) from the previous session."
         case let .exactWindowIdentityUnavailable(windowTitles):
             "These Window Targets do not expose a stable Exact Window Identity: \(windowTitles.joined(separator: ", ")). Choose their Application Targets instead."
-        case let .windowRestorationUnavailable(windowTitle):
-            "StayPane cannot persist the Exact Window Identity required for Restoration of \(windowTitle), so reliable enforcement cannot continue."
+        case let .windowRestorationUnavailable(applicationName, windowTitle):
+            "StayPane cannot safely identify \(windowTitle) from \(applicationName) for Restoration. Close it, allow \(applicationName), or reopen it before trying again."
         case .windowEnforcementPersistenceUnavailable:
             "StayPane could not load or save the exact-window enforcement state required for reliable Recovery and Restoration."
+        }
+    }
+
+    var diagnosticFailureCode: DiagnosticFailureCode {
+        switch self {
+        case .accessibilityPermissionMissing:
+            .accessibilityPermissionMissing
+        case .windowControlUnavailable:
+            .windowControlUnavailable
+        case .allowedApplicationsUnavailable:
+            .allowedApplicationUnavailable
+        case .allowedWindowsUnavailable:
+            .allowedWindowUnavailable
+        case .windowRestorationPending:
+            .restorationPending
+        case .exactWindowIdentityUnavailable:
+            .exactTargetIdentityUnavailable
+        case .windowRestorationUnavailable:
+            .windowIdentityUnavailable
+        case .windowEnforcementPersistenceUnavailable:
+            .windowPersistenceUnavailable
         }
     }
 }
@@ -42,10 +66,17 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         let processIdentifier: Int32
     }
 
+    private struct PlannedWindowMutation {
+        let window: CataloguedAccessibilityWindow
+        let applicationName: String
+        let exactReference: ExactWindowReference
+    }
+
     var onBlockedApplication: ((String) -> Void)?
     var onEnforcementFailure: ((Error) -> Void)?
     var onRestorationFailure: ((Int) -> Void)?
     var onRestorationRecovered: (() -> Void)?
+    var onUnconfirmedWindowMutation: (() -> Void)?
 
     var pendingRestorationCount: Int {
         max(restorationTracker.pendingCount, restorationReferences.count)
@@ -66,6 +97,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     private var lastFullScanUptime: TimeInterval = -.infinity
     private var allowedWindowReferences: [WindowIdentifier: ExactWindowReference]
     private var restorationReferences: [WindowIdentifier: ExactWindowReference]
+    private var pendingMutationReference: ExactWindowReference?
     private var windowEnforcementLoadFailed = false
 
     private static let fullScanInterval: TimeInterval = 0.25
@@ -92,12 +124,14 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             loadedSnapshot = try windowEnforcementStore.load()
                 ?? WindowEnforcementSnapshot(
                     allowedWindowReferences: [],
-                    restorationReferences: []
+                    restorationReferences: [],
+                    pendingMutationReference: nil
                 )
         } catch {
             loadedSnapshot = WindowEnforcementSnapshot(
                 allowedWindowReferences: [],
-                restorationReferences: []
+                restorationReferences: [],
+                pendingMutationReference: nil
             )
             windowEnforcementLoadFailed = true
         }
@@ -109,9 +143,11 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         for reference in loadedSnapshot.restorationReferences {
             restorationReferences[reference.windowIdentifier] = reference
         }
+        pendingMutationReference = loadedSnapshot.pendingMutationReference
         windowCatalog.registerExactWindowReferences(
             loadedSnapshot.allowedWindowReferences
                 + loadedSnapshot.restorationReferences
+                + [loadedSnapshot.pendingMutationReference].compactMap { $0 }
         )
         super.init()
     }
@@ -335,6 +371,7 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             .frontmostProcessIdentifier
         var refocusTarget: TargetIdentifier?
         var blockedNotice: String?
+        var plannedMutations: [PlannedWindowMutation] = []
 
         try windowCatalog.withWindowDiscoveryBatch {
             for application in workspaceApplications.runningApplicationSnapshots where
@@ -364,9 +401,15 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                         blockedNotice = "\(target.displayName) is outside this focus session."
                     }
                 }
-                try enforce(windows: windows, applicationName: target.displayName)
+                plannedMutations.append(
+                    contentsOf: try planMutations(
+                        for: windows,
+                        applicationName: target.displayName
+                    )
+                )
             }
         }
+        try apply(plannedMutations)
 
         if let blockedNotice {
             restoreAllowedFocus(preferredTarget: refocusTarget)
@@ -387,48 +430,99 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         windows: [CataloguedAccessibilityWindow],
         applicationName: String
     ) throws {
-        for window in windows where !windowPolicy.allows(window.observation) {
-            try minimize(window, applicationName: applicationName)
-        }
+        try apply(
+            try planMutations(
+                for: windows,
+                applicationName: applicationName
+            )
+        )
     }
 
-    private func minimize(
-        _ window: CataloguedAccessibilityWindow,
+    private func planMutations(
+        for windows: [CataloguedAccessibilityWindow],
         applicationName: String
-    ) throws {
-        switch windowOperator.minimizedState(of: window.element) {
-        case .minimized(true), .unavailable:
-            return
-        case .failed:
-            throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
-        case .minimized(false):
-            break
-        }
+    ) throws -> [PlannedWindowMutation] {
+        var mutations: [PlannedWindowMutation] = []
+        for window in windows where !windowPolicy.allows(window.observation) {
+            switch windowOperator.minimizedState(of: window.element) {
+            case .minimized(true), .unavailable:
+                continue
+            case .failed:
+                throw ApplicationEnforcementError.windowControlUnavailable(
+                    applicationName
+                )
+            case .minimized(false):
+                break
+            }
+            guard windowOperator.canSetMinimized(window.element) else {
+                throw ApplicationEnforcementError.windowControlUnavailable(
+                    applicationName
+                )
+            }
 
-        guard let exactReference = window.exactReference else {
-            throw ApplicationEnforcementError.windowRestorationUnavailable(
-                window.target.title
+            guard let exactReference = window.exactReference else {
+                throw ApplicationEnforcementError.windowRestorationUnavailable(
+                    applicationName: applicationName,
+                    windowTitle: window.target.title
+                )
+            }
+            mutations.append(
+                PlannedWindowMutation(
+                    window: window,
+                    applicationName: applicationName,
+                    exactReference: exactReference
+                )
             )
         }
-        restorationReferences[exactReference.windowIdentifier] = exactReference
-        do {
-            try persistWindowEnforcementSnapshot()
-        } catch {
-            restorationReferences.removeValue(
-                forKey: exactReference.windowIdentifier
-            )
-            throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
+        return mutations
+    }
+
+    private func apply(_ mutations: [PlannedWindowMutation]) throws {
+        guard !mutations.isEmpty else {
+            return
         }
 
-        switch windowOperator.setMinimized(true, for: window.element) {
-        case .success:
-            restorationTracker.recordChangedWindow(window.element)
-        case .unavailable:
-            try discardRestorationReference(exactReference.windowIdentifier)
-            return
-        case .failed:
-            try discardRestorationReference(exactReference.windowIdentifier)
-            throw ApplicationEnforcementError.windowControlUnavailable(applicationName)
+        for mutation in mutations {
+            pendingMutationReference = mutation.exactReference
+            do {
+                try persistWindowEnforcementSnapshot()
+            } catch {
+                pendingMutationReference = nil
+                throw ApplicationEnforcementError
+                    .windowEnforcementPersistenceUnavailable
+            }
+            switch windowOperator.setMinimized(
+                true,
+                for: mutation.window.element
+            ) {
+            case .success:
+                restorationTracker.recordChangedWindow(
+                    mutation.window.element
+                )
+                restorationReferences[
+                    mutation.exactReference.windowIdentifier
+                ] = mutation.exactReference
+                pendingMutationReference = nil
+                do {
+                    try persistWindowEnforcementSnapshot()
+                } catch {
+                    throw ApplicationEnforcementError
+                        .windowEnforcementPersistenceUnavailable
+                }
+            case .unavailable:
+                pendingMutationReference = nil
+                try persistWindowEnforcementSnapshot()
+            case .failed:
+                if case .minimized(false) = windowOperator.minimizedState(
+                    of: mutation.window.element
+                ) {
+                    pendingMutationReference = nil
+                    try persistWindowEnforcementSnapshot()
+                }
+                throw ApplicationEnforcementError.windowControlUnavailable(
+                    mutation.applicationName
+                )
+            }
         }
     }
 
@@ -574,8 +668,10 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
     }
 
     private func resolvePersistedWindowReferences() throws {
+        let hadUnconfirmedWindowMutation = pendingMutationReference != nil
         let allReferences = Array(allowedWindowReferences.values)
             + Array(restorationReferences.values)
+            + [pendingMutationReference].compactMap { $0 }
         let referencesByProcess = Dictionary(
             grouping: allReferences,
             by: {
@@ -586,10 +682,9 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
             }
         )
         for (processKey, references) in referencesByProcess {
-            guard let runningApplication = workspaceApplications.application(
+            guard let runningApplication = workspaceApplications.applicationSnapshot(
                 processIdentifier: processKey.processIdentifier
             ),
-            !runningApplication.isTerminated,
             runningApplication.bundleIdentifier == processKey.bundleIdentifier
             else {
                 for reference in references {
@@ -599,11 +694,16 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                     restorationReferences.removeValue(
                         forKey: reference.windowIdentifier
                     )
+                    if pendingMutationReference?.windowIdentifier
+                        == reference.windowIdentifier
+                    {
+                        pendingMutationReference = nil
+                    }
                 }
                 continue
             }
 
-            let application = makeApplicationTarget(runningApplication)
+            let application = runningApplication.target
             let windows: [CataloguedAccessibilityWindow]
             do {
                 windows = try windowCatalog.catalogueWindows(for: application)
@@ -625,9 +725,20 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                 restorationReferences.removeValue(
                     forKey: reference.windowIdentifier
                 )
+                if pendingMutationReference?.windowIdentifier
+                    == reference.windowIdentifier
+                {
+                    pendingMutationReference = nil
+                }
             }
         }
+        if pendingMutationReference != nil {
+            pendingMutationReference = nil
+        }
         try persistWindowEnforcementSnapshot()
+        if hadUnconfirmedWindowMutation {
+            onUnconfirmedWindowMutation?()
+        }
     }
 
     private func removeResolvedRestorationReferences() throws {
@@ -646,17 +757,6 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
         try persistWindowEnforcementSnapshot()
     }
 
-    private func discardRestorationReference(
-        _ identifier: WindowIdentifier
-    ) throws {
-        restorationReferences.removeValue(forKey: identifier)
-        do {
-            try persistWindowEnforcementSnapshot()
-        } catch {
-            throw ApplicationEnforcementError.windowEnforcementPersistenceUnavailable
-        }
-    }
-
     private func persistWindowEnforcementSnapshot() throws {
         try windowEnforcementStore.save(
             WindowEnforcementSnapshot(
@@ -665,7 +765,8 @@ final class ApplicationEnforcementController: NSObject, SessionEnforcing {
                 ),
                 restorationReferences: sortedExactWindowReferences(
                     Array(restorationReferences.values)
-                )
+                ),
+                pendingMutationReference: pendingMutationReference
             )
         )
         windowEnforcementLoadFailed = false

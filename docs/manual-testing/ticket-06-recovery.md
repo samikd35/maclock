@@ -21,6 +21,8 @@ Use short Sessions for sleep, lock, crash, permission, and expired-offline check
 6. Complete or end the Session and confirm only windows StayPane changed are restored. Pre-minimized and user-closed windows must not be reopened.
 7. Try a Window Target from an application that does not expose a unique Accessibility identifier. StayPane must refuse to start, explain that Exact Window Identity is unavailable, and recommend the broader Application Target.
 
+StayPane journals one pending window mutation at a time before writing the minimized state. If the app is terminated in the narrow interval before that write is confirmed, relaunch must not automatically reveal the uncertain window. The Status Panel reports the Unconfirmed Window Mutation so the user can restore it manually if needed.
+
 ## Expired while unavailable
 
 1. Start a short Session, Force Quit StayPane, and leave the target applications running until after the Fixed End Time.

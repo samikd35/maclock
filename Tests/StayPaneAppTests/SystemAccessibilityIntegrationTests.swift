@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import StayPaneCore
 import StayPanePlatform
 import Testing
 @testable import StayPane
@@ -21,6 +22,10 @@ func systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn() throws {
         return
     }
 
+    let application = NSApplication.shared
+    _ = application.setActivationPolicy(.regular)
+    application.finishLaunching()
+
     let title = "StayPane AX Fixture \(UUID().uuidString)"
     let fixtureWindow = NSWindow(
         contentRect: CGRect(x: 120, y: 120, width: 420, height: 240),
@@ -31,6 +36,7 @@ func systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn() throws {
     fixtureWindow.title = title
     fixtureWindow.setAccessibilityIdentifier(nil)
     fixtureWindow.makeKeyAndOrderFront(nil)
+    application.activate(ignoringOtherApps: true)
     defer {
         fixtureWindow.orderOut(nil)
     }
@@ -51,8 +57,86 @@ func systemAccessibilityAdapterControlsAFixtureWindowWhenOptedIn() throws {
             == UInt32(fixtureWindow.windowNumber)
     )
     #expect(operatorClient.minimizedState(of: fixture.element) == .minimized(false))
+    #expect(operatorClient.canSetMinimized(fixture.element))
     #expect(operatorClient.setMinimized(true, for: fixture.element) == .success)
-    #expect(operatorClient.minimizedState(of: fixture.element) == .minimized(true))
+    #expect(
+        waitForWindowState(
+            .minimized(true),
+            window: fixture.element,
+            operatorClient: operatorClient
+        )
+    )
     #expect(operatorClient.setMinimized(false, for: fixture.element) == .success)
+    #expect(
+        waitForWindowState(
+            .minimized(false),
+            window: fixture.element,
+            operatorClient: operatorClient
+        )
+    )
     #expect(operatorClient.raise(fixture.element) == .success)
+}
+
+@MainActor
+@Test(
+    .enabled(
+        if: ProcessInfo.processInfo.environment["STAYPANE_RUN_AX_INTEGRATION_TESTS"]
+            == "1",
+        "Set STAYPANE_RUN_AX_INTEGRATION_TESTS=1 to inspect Finder's real Accessibility window collection."
+    )
+)
+func systemCatalogExcludesFinderNonWindowArtifactWhenOptedIn() throws {
+    guard AXIsProcessTrusted() else {
+        Issue.record(
+            "Grant Accessibility access to the test host before running the opt-in AX integration test."
+        )
+        return
+    }
+    let finder = try #require(
+        NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.finder"
+        ).first
+    )
+    let provider = SystemAccessibilityWindowProvider()
+    let discovered = try provider.windows(
+        processIdentifier: finder.processIdentifier
+    )
+    let nonWindowElements = discovered.filter {
+        $0.role == "AXScrollArea"
+    }
+    guard !nonWindowElements.isEmpty else {
+        return
+    }
+    let catalog = AccessibilityWindowCatalog(provider: provider)
+    let catalogued = try catalog.catalogueWindows(
+        for: ApplicationTarget(
+            displayName: finder.localizedName ?? "Finder",
+            bundleIdentifier: "com.apple.finder",
+            processIdentifier: finder.processIdentifier,
+            applicationURL: finder.bundleURL
+        )
+    )
+
+    for nonWindowElement in nonWindowElements {
+        #expect(!catalogued.contains(where: {
+            CFEqual($0.element, nonWindowElement.element)
+        }))
+    }
+}
+
+@MainActor
+private func waitForWindowState(
+    _ expectedState: AccessibilityWindowState,
+    window: AXUIElement,
+    operatorClient: SystemAccessibilityWindowOperator,
+    timeout: TimeInterval = 1
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if operatorClient.minimizedState(of: window) == expectedState {
+            return true
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    } while Date() < deadline
+    return false
 }

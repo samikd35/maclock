@@ -16,8 +16,15 @@ public enum AccessibilityWindowWriteResult: Equatable, Sendable {
 @MainActor
 public protocol AccessibilityWindowOperating: AnyObject {
     func minimizedState(of window: AXUIElement) -> AccessibilityWindowState
+    func canSetMinimized(_ window: AXUIElement) -> Bool
     func setMinimized(_ minimized: Bool, for window: AXUIElement) -> AccessibilityWindowWriteResult
     func raise(_ window: AXUIElement) -> AccessibilityWindowWriteResult
+}
+
+public extension AccessibilityWindowOperating {
+    func canSetMinimized(_ window: AXUIElement) -> Bool {
+        true
+    }
 }
 
 @MainActor
@@ -39,6 +46,16 @@ public final class SystemAccessibilityWindowOperator: AccessibilityWindowOperati
             return .failed
         }
         return .minimized(minimized)
+    }
+
+    public func canSetMinimized(_ window: AXUIElement) -> Bool {
+        var isSettable = DarwinBoolean(false)
+        let result = AXUIElementIsAttributeSettable(
+            window,
+            kAXMinimizedAttribute as CFString,
+            &isSettable
+        )
+        return result == .success && isSettable.boolValue
     }
 
     public func setMinimized(

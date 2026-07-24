@@ -11,6 +11,7 @@ enum DiagnosticEvent: String, Codable, Equatable, Sendable {
     case sessionInterrupted
     case restorationPending
     case restorationRecovered
+    case unconfirmedWindowMutation
 }
 
 struct DiagnosticEntry: Codable, Equatable, Sendable {
@@ -21,7 +22,21 @@ struct DiagnosticEntry: Codable, Equatable, Sendable {
 
 enum DiagnosticDetail: Sendable {
     case count(Int)
+    case failure(DiagnosticFailureCode)
     case privateContent(String, privateValues: [String])
+}
+
+enum DiagnosticFailureCode: String, Sendable {
+    case accessibilityPermissionMissing
+    case allowedApplicationUnavailable
+    case allowedWindowUnavailable
+    case exactTargetIdentityUnavailable
+    case restorationPending
+    case windowControlUnavailable
+    case windowIdentityUnavailable
+    case windowPersistenceUnavailable
+    case browserUnavailable
+    case unknown
 }
 
 @MainActor
@@ -74,6 +89,8 @@ final class DiagnosticLog {
         switch detail {
         case let .count(count):
             "count: \(max(0, count))"
+        case let .failure(code):
+            "failure: \(code.rawValue)"
         case let .privateContent(value, privateValues):
             redact(value, privateValues: privateValues)
         case nil:
