@@ -92,8 +92,8 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 - [x] Clicking the menu-bar item opens setup when idle and session status when active.
 - [x] The active panel shows remaining time, allowed targets, enforcement status, and End Session Early without permitting edits.
 - [x] An optional native floating timer stays above work without being injected into webpages.
-- [x] The floating timer can move, collapse into a compact pill, and hide completely while the menu-bar timer remains.
-- [x] Floating timer position and collapsed state persist locally between launches.
+- [x] The floating timer can move, switch among Small, Medium, and Large sizes, collapse into a compact pill, and hide completely while the menu-bar timer remains.
+- [x] Floating timer position, size, and collapsed state persist locally between launches.
 - [x] A non-destructive global shortcut opens the StayPane panel.
 - [x] No global shortcut starts, resets, or quits a session.
 - [x] The UI remains usable when notification permission is denied.

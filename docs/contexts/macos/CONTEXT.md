@@ -56,7 +56,7 @@ The calm native status shown across the menu bar, Status Panel, and optional Flo
 _Avoid_: Native presence, timer chrome
 
 **Floating Timer**:
-An optional movable native countdown that stays above work and can collapse or hide without affecting the menu-bar countdown.
+An optional movable and size-adjustable native countdown that stays above work and can collapse or hide without affecting the menu-bar countdown.
 _Avoid_: Overlay, webpage timer, widget
 
 **Open-Panel Shortcut**:

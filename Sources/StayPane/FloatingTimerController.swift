@@ -2,6 +2,23 @@ import AppKit
 import Combine
 import SwiftUI
 
+final class FloatingTimerPanel: NSPanel {
+    static let requiredCollectionBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllApplications,
+        .canJoinAllSpaces,
+        .fullScreenAuxiliary,
+        .ignoresCycle
+    ]
+
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        false
+    }
+}
+
 @MainActor
 final class FloatingTimerController: NSObject, NSWindowDelegate {
     private let model: StayPaneModel
@@ -9,7 +26,13 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private var cancellables: Set<AnyCancellable> = []
     private var isApplyingFrame = false
-    private var lastAppliedCollapsedState: Bool?
+    private var lastAppliedLayout: AppliedLayout?
+
+    private struct AppliedLayout: Equatable {
+        let isCollapsed: Bool
+        let size: FloatingTimerSize
+        let origin: CGPoint?
+    }
 
     init(
         model: StayPaneModel,
@@ -49,8 +72,8 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         self.panel = panel
     }
 
-    private func makePanel() -> NSPanel {
-        let panel = NSPanel(
+    private func makePanel() -> FloatingTimerPanel {
+        let panel = FloatingTimerPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -60,14 +83,12 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.level = .floating
+        panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [
-            .canJoinAllSpaces,
-            .fullScreenAuxiliary,
-            .ignoresCycle
-        ]
+        panel.collectionBehavior =
+            FloatingTimerPanel.requiredCollectionBehavior
         panel.delegate = self
         panel.contentView = NSHostingView(
             rootView: FloatingTimerView(
@@ -82,45 +103,139 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         _ value: FloatingTimerPreferences,
         to panel: NSPanel
     ) {
-        guard lastAppliedCollapsedState != value.isCollapsed else {
+        let layout = AppliedLayout(
+            isCollapsed: value.isCollapsed,
+            size: value.size,
+            origin: value.origin
+        )
+        if let lastAppliedLayout,
+           lastAppliedLayout.isCollapsed == layout.isCollapsed,
+           lastAppliedLayout.size == layout.size,
+           lastAppliedLayout.origin != layout.origin
+        {
+            if value.origin == panel.frame.origin {
+                self.lastAppliedLayout = layout
+                return
+            }
+            isApplyingFrame = true
+            panel.setFrameOrigin(
+                resolvedOrigin(
+                    savedOrigin: value.origin,
+                    size: panel.frame.size
+                )
+            )
+            isApplyingFrame = false
+            self.lastAppliedLayout = layout
+            preferences.move(to: panel.frame.origin)
             return
         }
-        let contentSize = value.isCollapsed
-            ? CGSize(width: 190, height: 44)
-            : CGSize(width: 250, height: 62)
-        let previousTopLeft = panel.frame.size == .zero
+        guard lastAppliedLayout != layout else {
+            return
+        }
+        let metrics = FloatingTimerLayoutMetrics.resolve(
+            size: value.size,
+            isCollapsed: value.isCollapsed
+        )
+        let previousFrame = panel.frame.size == .zero
             ? nil
-            : CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+            : panel.frame
 
         isApplyingFrame = true
-        panel.setContentSize(contentSize)
-        if let previousTopLeft {
-            panel.setFrameTopLeftPoint(previousTopLeft)
-        } else if let origin = value.origin,
-                  isVisible(origin: origin, size: panel.frame.size)
-        {
-            panel.setFrameOrigin(origin)
+        panel.setContentSize(metrics.contentSize)
+        if let previousFrame {
+            let previousTopLeft = CGPoint(
+                x: previousFrame.minX,
+                y: previousFrame.maxY
+            )
+            let desiredOrigin = CGPoint(
+                x: previousTopLeft.x,
+                y: previousTopLeft.y - panel.frame.height
+            )
+            panel.setFrameOrigin(
+                constrainedOrigin(
+                    desiredOrigin,
+                    size: panel.frame.size,
+                    preferredScreen: screen(for: previousFrame)
+                )
+            )
         } else {
-            panel.setFrameOrigin(defaultOrigin(for: panel.frame.size))
+            panel.setFrameOrigin(
+                resolvedOrigin(
+                    savedOrigin: value.origin,
+                    size: panel.frame.size
+                )
+            )
         }
         isApplyingFrame = false
-        lastAppliedCollapsedState = value.isCollapsed
+        lastAppliedLayout = layout
 
         preferences.move(to: panel.frame.origin)
     }
 
-    private func isVisible(origin: CGPoint, size: CGSize) -> Bool {
-        let frame = CGRect(origin: origin, size: size)
-        return NSScreen.screens.contains { screen in
-            screen.visibleFrame.intersects(frame)
+    private func screen(for frame: CGRect) -> NSScreen? {
+        let candidate = NSScreen.screens.max { left, right in
+            intersectionArea(left.visibleFrame, frame)
+                < intersectionArea(right.visibleFrame, frame)
         }
+        guard let candidate,
+              intersectionArea(candidate.visibleFrame, frame) > 0
+        else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func intersectionArea(_ left: CGRect, _ right: CGRect) -> CGFloat {
+        let intersection = left.intersection(right)
+        guard !intersection.isNull else {
+            return 0
+        }
+        return intersection.width * intersection.height
+    }
+
+    private func constrainedOrigin(
+        _ origin: CGPoint,
+        size: CGSize,
+        preferredScreen: NSScreen?
+    ) -> CGPoint {
+        let visibleFrame = preferredScreen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? .zero
+        let maximumX = max(visibleFrame.minX, visibleFrame.maxX - size.width)
+        let maximumY = max(visibleFrame.minY, visibleFrame.maxY - size.height)
+        return CGPoint(
+            x: min(max(origin.x, visibleFrame.minX), maximumX),
+            y: min(max(origin.y, visibleFrame.minY), maximumY)
+        )
+    }
+
+    private func resolvedOrigin(
+        savedOrigin: CGPoint?,
+        size: CGSize
+    ) -> CGPoint {
+        guard let savedOrigin else {
+            return defaultOrigin(for: size)
+        }
+        let desiredFrame = CGRect(
+            origin: savedOrigin,
+            size: size
+        )
+        return constrainedOrigin(
+            savedOrigin,
+            size: size,
+            preferredScreen: screen(for: desiredFrame)
+        )
     }
 
     private func defaultOrigin(for size: CGSize) -> CGPoint {
         let visibleFrame = NSScreen.main?.visibleFrame ?? .zero
-        return CGPoint(
-            x: visibleFrame.maxX - size.width - 24,
-            y: visibleFrame.maxY - size.height - 24
+        return constrainedOrigin(
+            CGPoint(
+                x: visibleFrame.maxX - size.width - 24,
+                y: visibleFrame.maxY - size.height - 24
+            ),
+            size: size,
+            preferredScreen: NSScreen.main
         )
     }
 }

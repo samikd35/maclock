@@ -88,9 +88,9 @@ The v1 experience is a menu-bar application with a setup window, an optional flo
 66. As a focus user, I want the remaining time visible in the menu bar, so that progress is available without opening a window.
 67. As a focus user, I want an optional floating timer, so that the countdown can remain visible over my work.
 68. As a focus user, I want to move the floating timer, so that it does not cover important content.
-69. As a focus user, I want to collapse the floating timer into a small pill, so that it remains present but unobtrusive.
+69. As a focus user, I want to resize the floating timer or collapse it into a small pill, so that the countdown remains readable without covering important work.
 70. As a focus user, I want to hide the floating timer while retaining the menu-bar countdown, so that visible timer pressure is optional.
-71. As a returning user, I want the floating timer to remember its position and collapsed state, so that it fits my workspace consistently.
+71. As a returning user, I want the floating timer to remember its position, size, and collapsed state, so that it fits my workspace consistently.
 72. As a focus user, I want a shortcut that opens the StayPane panel, so that session status is easy to reach.
 73. As a focus user, I do not want global start, reset, or quit shortcuts, so that destructive actions cannot happen accidentally.
 74. As a focus user, I want an optional reminder to enable macOS Focus before starting, so that notifications from blocked apps can be silenced.
@@ -192,7 +192,7 @@ The v1 experience is a menu-bar application with a setup window, an optional flo
 - Restoration applies only to windows StayPane minimized. Windows already minimized remain minimized; windows closed by the user are not reopened. A failure restoring one window does not block restoration of others.
 - Window state restoration preserves position, size, display, and Space by avoiding changes to those properties. Where macOS prevents exact restoration, StayPane reports the limitation without blocking unlock.
 - The primary interface is a menu-bar application. The setup and active-session panel is reachable from the menu bar and a non-destructive global open-panel shortcut. There are no global start, reset, or quit shortcuts.
-- The remaining time appears in the menu bar while active. An optional native floating timer is movable, collapsible, hideable, and remembers position and collapsed state. It is not injected into webpages.
+- The remaining time appears in the menu bar while active. An optional native floating timer is movable, size-adjustable, collapsible, hideable, and remembers position, size, and collapsed state. It is not injected into webpages.
 - macOS Focus integration is reminder-based in v1. StayPane may open Focus settings and explain notification behavior but does not automate Control Center or use private APIs.
 - First-run onboarding covers the honest boundary, local-only privacy, Accessibility permission, optional Chrome setup, connection verification, and a harmless enforcement test.
 - Notification permission is optional. If denied, in-app and menu-bar completion feedback remains available.

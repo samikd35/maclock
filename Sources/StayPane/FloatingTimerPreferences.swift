@@ -2,9 +2,31 @@ import Combine
 import CoreGraphics
 import Foundation
 
+enum FloatingTimerSize: String, CaseIterable, Equatable, Hashable, Sendable {
+    case small
+    case medium
+    case large
+
+    var displayName: String {
+        rawValue.capitalized
+    }
+
+    func stepped(by offset: Int) -> FloatingTimerSize {
+        guard let currentIndex = Self.allCases.firstIndex(of: self) else {
+            return self
+        }
+        let destination = min(
+            max(currentIndex + offset, Self.allCases.startIndex),
+            Self.allCases.index(before: Self.allCases.endIndex)
+        )
+        return Self.allCases[destination]
+    }
+}
+
 struct FloatingTimerPreferences: Equatable {
     var isVisible: Bool
     var isCollapsed: Bool
+    var size: FloatingTimerSize
     var origin: CGPoint?
 }
 
@@ -14,6 +36,7 @@ final class FloatingTimerPreferenceModel: ObservableObject {
 
     private enum Key {
         static let isCollapsed = "floatingTimerIsCollapsed"
+        static let size = "floatingTimerSize"
         static let originX = "floatingTimerOriginX"
         static let originY = "floatingTimerOriginY"
     }
@@ -36,8 +59,19 @@ final class FloatingTimerPreferenceModel: ObservableObject {
         value = FloatingTimerPreferences(
             isVisible: true,
             isCollapsed: defaults.bool(forKey: Key.isCollapsed),
+            size: FloatingTimerSize(
+                rawValue: defaults.string(forKey: Key.size) ?? ""
+            ) ?? .medium,
             origin: origin
         )
+    }
+
+    var canDecreaseSize: Bool {
+        value.size != .small
+    }
+
+    var canIncreaseSize: Bool {
+        value.size != .large
     }
 
     func setVisible(_ isVisible: Bool) {
@@ -60,7 +94,23 @@ final class FloatingTimerPreferenceModel: ObservableObject {
         save()
     }
 
-    func move(to origin: CGPoint) {
+    func decreaseSize() {
+        setSize(value.size.stepped(by: -1))
+    }
+
+    func increaseSize() {
+        setSize(value.size.stepped(by: 1))
+    }
+
+    func setSize(_ size: FloatingTimerSize) {
+        guard value.size != size else {
+            return
+        }
+        value.size = size
+        save()
+    }
+
+    func move(to origin: CGPoint?) {
         guard value.origin != origin else {
             return
         }
@@ -68,8 +118,13 @@ final class FloatingTimerPreferenceModel: ObservableObject {
         save()
     }
 
+    func resetPosition() {
+        move(to: nil)
+    }
+
     private func save() {
         defaults.set(value.isCollapsed, forKey: Key.isCollapsed)
+        defaults.set(value.size.rawValue, forKey: Key.size)
         if let origin = value.origin {
             defaults.set(origin.x, forKey: Key.originX)
             defaults.set(origin.y, forKey: Key.originY)

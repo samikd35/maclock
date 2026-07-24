@@ -838,15 +838,39 @@ struct StayPaneMenuView: View {
                 if floatingTimerPreferences.value.isVisible {
                     Button(
                         floatingTimerPreferences.value.isCollapsed
-                            ? "Expand"
-                            : "Collapse"
+                            ? "Expand Floating Timer"
+                            : "Collapse Floating Timer"
                     ) {
                         floatingTimerPreferences.toggleCollapsed()
                     }
                     .buttonStyle(.bordered)
                 }
             }
-            Text("The Floating Timer is native, movable, and optional. The menu-bar countdown remains visible when it is hidden.")
+            if floatingTimerPreferences.value.isVisible {
+                HStack {
+                    Button("Smaller") {
+                        floatingTimerPreferences.decreaseSize()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!floatingTimerPreferences.canDecreaseSize)
+
+                    Text(floatingTimerPreferences.value.size.displayName)
+                        .font(.caption.weight(.semibold))
+                        .frame(minWidth: 48)
+
+                    Button("Larger") {
+                        floatingTimerPreferences.increaseSize()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!floatingTimerPreferences.canIncreaseSize)
+
+                    Button("Move to Top Right") {
+                        floatingTimerPreferences.resetPosition()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            Text("The Floating Timer stays above work. Drag it to move, use Smaller or Larger to resize, and collapse or hide it without affecting the menu-bar countdown.")
                 .font(.caption2)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -874,7 +898,20 @@ struct StayPaneMenuView: View {
             )
             .toggleStyle(.switch)
             .disabled(!floatingTimerPreferences.value.isVisible)
-            Text("A native movable countdown above your work. It is never injected into webpages.")
+            Picker(
+                "Timer size",
+                selection: Binding(
+                    get: { floatingTimerPreferences.value.size },
+                    set: { floatingTimerPreferences.setSize($0) }
+                )
+            ) {
+                ForEach(FloatingTimerSize.allCases, id: \.self) { size in
+                    Text(size.displayName).tag(size)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!floatingTimerPreferences.value.isVisible)
+            Text("A native movable countdown above your work. Use its − and + controls to resize it, or collapse it into a compact pill. It is never injected into webpages.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1050,9 +1087,10 @@ struct StayPaneMenuView: View {
         guard floatingTimerPreferences.value.isVisible else {
             return "Hidden; menu-bar countdown remains"
         }
-        return floatingTimerPreferences.value.isCollapsed
-            ? "Visible, collapsed"
-            : "Visible, expanded"
+        let state = floatingTimerPreferences.value.isCollapsed
+            ? "collapsed"
+            : "expanded"
+        return "Visible, \(state), \(floatingTimerPreferences.value.size.displayName.lowercased())"
     }
 
     private var broadApplicationWarning: some View {

@@ -12,11 +12,13 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 ## Floating Timer
 
 1. Start a Session with the Floating Timer preference visible. Confirm the native Floating Timer appears above ordinary application windows without any browser extension or webpage injection.
-2. Drag it to another position and, when available, another display. It must remain movable and must not activate blocked content.
-3. Collapse it into the compact pill, then expand it. The remaining time and hide control must remain usable in both forms.
-4. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
-5. Show it, move it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position and collapsed state must be restored. A Floating Timer hidden during the prior launch defaults to visible again.
-6. Repeat with an allowed application in native full screen. The Floating Timer must remain available as auxiliary native UI without exiting full screen.
+2. Drag it by the visible handle to another position and, when available, another display. It must remain movable and must not activate blocked content.
+3. Use − and + to switch through Small, Medium, and Large. The Floating Timer and countdown must visibly resize, remain completely on a connected display, and continue counting down.
+4. Collapse it into the compact pill, then expand it. The countdown must remain visible and movable in both layouts.
+5. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
+6. Show it, move it, resize it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position, size, and collapsed state must be restored. A Floating Timer hidden during the prior launch defaults to visible again.
+7. Repeat with an allowed application in native full screen. The Floating Timer must remain available as auxiliary native UI without exiting full screen.
+8. Navigate the active Status Panel with the keyboard and VoiceOver. Smaller, Larger, Collapse/Expand, Hide/Show, and Move to Top Right must provide non-drag alternatives for every Floating Timer control.
 
 ## Global Open-Panel Shortcut
 
@@ -34,4 +36,4 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 
 ## Automated companion checks
 
-Run `make test`. The tests cover menu-bar presence for active, reset-pending, and terminal states; persisted Floating Timer position/collapse; session-local hiding; and the single-purpose Open-Panel Shortcut definition.
+Run `make test`. The tests cover menu-bar presence for active, reset-pending, and terminal states; persisted Floating Timer position, size, and collapsed layout; session-local hiding; and the single-purpose Open-Panel Shortcut definition.

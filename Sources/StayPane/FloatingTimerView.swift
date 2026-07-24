@@ -5,22 +5,45 @@ struct FloatingTimerView: View {
     @ObservedObject var preferences: FloatingTimerPreferenceModel
 
     var body: some View {
-        HStack(spacing: preferences.value.isCollapsed ? 8 : 12) {
-            Image(systemName: "timer")
-                .foregroundStyle(.tint)
+        let metrics = FloatingTimerLayoutMetrics.resolve(
+            size: preferences.value.size,
+            isCollapsed: preferences.value.isCollapsed
+        )
+        return HStack(spacing: metrics.spacing) {
+            dragHandle(fontSize: metrics.iconFontSize)
 
             if preferences.value.isCollapsed {
                 Text(model.formattedRemainingTime)
-                    .font(.headline.monospacedDigit())
+                    .font(
+                        .system(
+                            size: metrics.timeFontSize,
+                            weight: .bold,
+                            design: .monospaced
+                        )
+                    )
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .layoutPriority(1)
             } else {
+                Image(systemName: "timer")
+                    .font(.system(size: metrics.iconFontSize))
+                    .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Session")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                     Text(model.formattedRemainingTime)
-                        .font(.title2.bold().monospacedDigit())
+                        .font(
+                            .system(
+                                size: metrics.timeFontSize,
+                                weight: .bold,
+                                design: .monospaced
+                            )
+                        )
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 2)
+                sizeControls
             }
 
             Button {
@@ -53,8 +76,12 @@ struct FloatingTimerView: View {
             .help("Hide Floating Timer")
             .accessibilityLabel("Hide Floating Timer")
         }
-        .padding(.horizontal, preferences.value.isCollapsed ? 10 : 14)
-        .padding(.vertical, preferences.value.isCollapsed ? 8 : 10)
+        .padding(.horizontal, metrics.horizontalPadding)
+        .padding(.vertical, metrics.verticalPadding)
+        .frame(
+            width: metrics.contentSize.width,
+            height: metrics.contentSize.height
+        )
         .background(.regularMaterial, in: Capsule())
         .overlay {
             Capsule()
@@ -62,5 +89,49 @@ struct FloatingTimerView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("StayPane Floating Timer")
+        .accessibilityHint(
+            "Drag the handle to move. Use the Move Floating Timer to Top Right action for keyboard or VoiceOver placement."
+        )
+        .accessibilityAction(
+            named: Text("Move Floating Timer to Top Right")
+        ) {
+            preferences.resetPosition()
+        }
+    }
+
+    private var sizeControls: some View {
+        HStack(spacing: 5) {
+            Button {
+                preferences.decreaseSize()
+            } label: {
+                Image(systemName: "minus")
+            }
+            .buttonStyle(.plain)
+            .disabled(!preferences.canDecreaseSize)
+            .help("Decrease Floating Timer Size")
+            .accessibilityLabel("Decrease Floating Timer Size")
+
+            Button {
+                preferences.increaseSize()
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .disabled(!preferences.canIncreaseSize)
+            .help("Increase Floating Timer Size")
+            .accessibilityLabel("Increase Floating Timer Size")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "Floating Timer size: \(preferences.value.size.displayName)"
+        )
+    }
+
+    private func dragHandle(fontSize: CGFloat) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: fontSize))
+            .foregroundStyle(.secondary)
+            .help("Drag to Move Floating Timer")
+            .accessibilityHidden(true)
     }
 }
