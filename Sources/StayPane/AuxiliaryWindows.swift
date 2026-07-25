@@ -374,7 +374,7 @@ struct StayPaneHistoryView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Clear History…", role: .destructive) {
+                Button("Clear Session History…", role: .destructive) {
                     model.requestHistoryClear()
                 }
                 .disabled(model.sessionHistory.isEmpty)

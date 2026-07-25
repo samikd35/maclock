@@ -27,6 +27,7 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var isApplyingFrame = false
     private var isLiveResizing = false
+    private var movePersistenceTask: Task<Void, Never>?
     private var lastAppliedLayout: AppliedLayout?
 
     private struct AppliedLayout: Equatable {
@@ -72,7 +73,7 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         guard !isApplyingFrame, !isLiveResizing, let panel else {
             return
         }
-        preferences.move(to: panel.frame.origin)
+        scheduleMovePersistence(for: panel)
     }
 
     func windowWillStartLiveResize(_ notification: Notification) {
@@ -280,6 +281,38 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
             scale: preferences.value.scale,
             origin: origin
         )
+    }
+
+    private func scheduleMovePersistence(
+        for panel: NSPanel
+    ) {
+        movePersistenceTask?.cancel()
+        movePersistenceTask = Task { [weak self, weak panel] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let self, let panel else {
+                return
+            }
+            if NSEvent.pressedMouseButtons != 0 {
+                scheduleMovePersistence(for: panel)
+                return
+            }
+            let origin = constrainedOrigin(
+                panel.frame.origin,
+                size: panel.frame.size,
+                preferredScreen: screen(for: panel.frame) ?? NSScreen.main
+            )
+            if origin != panel.frame.origin {
+                isApplyingFrame = true
+                panel.setFrameOrigin(origin)
+                isApplyingFrame = false
+            }
+            preferences.move(to: origin)
+            lastAppliedLayout = AppliedLayout(
+                isCollapsed: preferences.value.isCollapsed,
+                scale: preferences.value.scale,
+                origin: origin
+            )
+        }
     }
 
     private func screen(for frame: CGRect) -> NSScreen? {
