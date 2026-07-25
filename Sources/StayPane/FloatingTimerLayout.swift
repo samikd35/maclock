@@ -4,6 +4,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
     let contentSize: CGSize
     let timeFontSize: CGFloat
     let iconFontSize: CGFloat
+    let labelFontSize: CGFloat
+    let controlFontSize: CGFloat
     let horizontalPadding: CGFloat
     let verticalPadding: CGFloat
     let spacing: CGFloat
@@ -30,6 +32,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 280, height: 58),
             timeFontSize: 22,
             iconFontSize: 14,
+            labelFontSize: 10,
+            controlFontSize: 13,
             horizontalPadding: 10,
             verticalPadding: 7,
             spacing: 8
@@ -38,6 +42,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 330, height: 70),
             timeFontSize: 28,
             iconFontSize: 17,
+            labelFontSize: 12,
+            controlFontSize: 16,
             horizontalPadding: 14,
             verticalPadding: 9,
             spacing: 10
@@ -46,6 +52,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 520, height: 116),
             timeFontSize: 52,
             iconFontSize: 27,
+            labelFontSize: 20,
+            controlFontSize: 25,
             horizontalPadding: 26,
             verticalPadding: 15,
             spacing: 16
@@ -57,6 +65,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 220, height: 38),
             timeFontSize: 16,
             iconFontSize: 11,
+            labelFontSize: 9,
+            controlFontSize: 10,
             horizontalPadding: 9,
             verticalPadding: 6,
             spacing: 7
@@ -65,6 +75,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 250, height: 46),
             timeFontSize: 19,
             iconFontSize: 13,
+            labelFontSize: 10,
+            controlFontSize: 12,
             horizontalPadding: 10,
             verticalPadding: 7,
             spacing: 8
@@ -73,6 +85,8 @@ struct FloatingTimerLayoutMetrics: Equatable {
             contentSize: CGSize(width: 390, height: 76),
             timeFontSize: 34,
             iconFontSize: 20,
+            labelFontSize: 16,
+            controlFontSize: 18,
             horizontalPadding: 18,
             verticalPadding: 11,
             spacing: 12
@@ -118,6 +132,16 @@ struct FloatingTimerLayoutMetrics: Equatable {
             ),
             timeFontSize: mix(start.timeFontSize, end.timeFontSize, amount),
             iconFontSize: mix(start.iconFontSize, end.iconFontSize, amount),
+            labelFontSize: mix(
+                start.labelFontSize,
+                end.labelFontSize,
+                amount
+            ),
+            controlFontSize: mix(
+                start.controlFontSize,
+                end.controlFontSize,
+                amount
+            ),
             horizontalPadding: mix(
                 start.horizontalPadding,
                 end.horizontalPadding,

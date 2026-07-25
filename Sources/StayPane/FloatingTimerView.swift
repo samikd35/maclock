@@ -78,7 +78,12 @@ struct FloatingTimerView: View {
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Session")
-                        .font(.caption.weight(.medium))
+                        .font(
+                            .system(
+                                size: metrics.labelFontSize,
+                                weight: .medium
+                            )
+                        )
                         .foregroundStyle(.secondary)
                     Text(model.formattedRemainingTime)
                         .font(
@@ -103,6 +108,7 @@ struct FloatingTimerView: View {
                 )
             }
             .buttonStyle(.plain)
+            .font(.system(size: metrics.controlFontSize))
             .help(
                 preferences.value.isCollapsed
                     ? "Expand Floating Timer"
@@ -120,6 +126,7 @@ struct FloatingTimerView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
+            .font(.system(size: metrics.controlFontSize))
             .help("Hide Floating Timer")
             .accessibilityLabel("Hide Floating Timer")
         }

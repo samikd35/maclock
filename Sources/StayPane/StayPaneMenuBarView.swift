@@ -15,9 +15,9 @@ struct StayPaneMenuBarView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("StayPane")
                         .font(.headline)
-                    Text(statusTitle)
+                    Text(menuBarPresentation.statusTitle)
                         .font(.caption)
-                        .foregroundStyle(statusColor)
+                        .foregroundStyle(menuBarPresentation.statusColor)
                 }
                 Spacer()
             }
@@ -41,7 +41,7 @@ struct StayPaneMenuBarView: View {
                 .toggleStyle(.switch)
             }
 
-            Button(openButtonTitle) {
+            Button(menuBarPresentation.openButtonTitle) {
                 openStatusPanel()
             }
             .buttonStyle(.borderedProminent)
@@ -52,7 +52,9 @@ struct StayPaneMenuBarView: View {
         .padding(16)
         .frame(width: 330)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("StayPane, \(statusTitle)")
+        .accessibilityLabel(
+            "StayPane, \(menuBarPresentation.statusTitle)"
+        )
     }
 
     @ViewBuilder
@@ -136,54 +138,64 @@ struct StayPaneMenuBarView: View {
         return "\(count) Target\(count == 1 ? "" : "s") selected"
     }
 
-    private var statusTitle: String {
+    private var menuBarPresentation: MenuBarPresentation {
         switch sessionPresentationState {
         case .onboarding:
-            "Setup required"
+            MenuBarPresentation(
+                statusTitle: "Setup required",
+                statusColor: .secondary,
+                openButtonTitle: "Open Setup"
+            )
         case .setup, .review:
-            "Ready"
+            MenuBarPresentation(
+                statusTitle: "Ready",
+                statusColor: .secondary,
+                openButtonTitle: sessionPresentationState == .review
+                    ? "Open Review"
+                    : "New Session"
+            )
         case .countdown:
-            "Starting"
+            MenuBarPresentation(
+                statusTitle: "Starting",
+                statusColor: .blue,
+                openButtonTitle: "Open Session"
+            )
         case .recovering:
-            "Recovering"
+            MenuBarPresentation(
+                statusTitle: "Recovering",
+                statusColor: .blue,
+                openButtonTitle: "Open Session"
+            )
         case .active:
-            "Session locked"
+            MenuBarPresentation(
+                statusTitle: "Session locked",
+                statusColor: .green,
+                openButtonTitle: "Open Session"
+            )
         case .resetPending:
-            "Early reset pending"
+            MenuBarPresentation(
+                statusTitle: "Early reset pending",
+                statusColor: .orange,
+                openButtonTitle: "Open Session"
+            )
         case .completed:
-            "Complete"
+            MenuBarPresentation(
+                statusTitle: "Complete",
+                statusColor: .secondary,
+                openButtonTitle: "Open Summary"
+            )
         case .endedEarly:
-            "Ended early"
+            MenuBarPresentation(
+                statusTitle: "Ended early",
+                statusColor: .orange,
+                openButtonTitle: "Open Summary"
+            )
         case .interrupted:
-            "Interrupted"
-        }
-    }
-
-    private var statusColor: Color {
-        switch sessionPresentationState {
-        case .active:
-            .green
-        case .countdown, .recovering:
-            .blue
-        case .resetPending, .endedEarly, .interrupted:
-            .orange
-        case .onboarding, .setup, .review, .completed:
-            .secondary
-        }
-    }
-
-    private var openButtonTitle: String {
-        switch sessionPresentationState {
-        case .onboarding:
-            "Open Setup"
-        case .setup:
-            "New Session"
-        case .review:
-            "Open Review"
-        case .countdown, .recovering, .active, .resetPending:
-            "Open Session"
-        case .completed, .endedEarly, .interrupted:
-            "Open Summary"
+            MenuBarPresentation(
+                statusTitle: "Interrupted",
+                statusColor: .orange,
+                openButtonTitle: "Open Summary"
+            )
         }
     }
 
@@ -197,5 +209,11 @@ struct StayPaneMenuBarView: View {
 
     private func formattedTime(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private struct MenuBarPresentation {
+        let statusTitle: String
+        let statusColor: Color
+        let openButtonTitle: String
     }
 }

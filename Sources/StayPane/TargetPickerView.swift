@@ -69,23 +69,6 @@ struct TargetPickerView: View {
             focusApplication(focusedApplication)
             return .handled
         }
-        .onKeyPress(.space) {
-            guard let focusedApplication,
-                  focusedApplication.isAvailable
-                    || model.selectedApplicationIDs.contains(
-                        focusedApplication.id
-                    )
-            else {
-                return .ignored
-            }
-            model.setApplication(
-                id: focusedApplication.id,
-                isSelected: !model.selectedApplicationIDs.contains(
-                    focusedApplication.id
-                )
-            )
-            return .handled
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Target picker")
     }

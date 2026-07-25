@@ -56,10 +56,14 @@ enum StayPaneSessionPresentationState: Equatable, Sendable {
             .setup
         case .review:
             .review
-        case .countdown, .recovering, .active, .resetPending:
+        case .countdown, .active, .resetPending:
             .active
-        case .completed, .endedEarly:
+        case .recovering:
+            .recovery
+        case .completed:
             .completed
+        case .endedEarly:
+            .endedEarly
         case .interrupted:
             .interrupted
         }
@@ -90,7 +94,9 @@ enum StayPanePanelPresentation: String, CaseIterable, Equatable, Sendable {
     case setup
     case review
     case active
+    case recovery
     case completed
+    case endedEarly
     case interrupted
 
     var preferredContentSize: CGSize {
@@ -101,7 +107,11 @@ enum StayPanePanelPresentation: String, CaseIterable, Equatable, Sendable {
             CGSize(width: 600, height: 520)
         case .active:
             CGSize(width: 480, height: 400)
+        case .recovery:
+            CGSize(width: 560, height: 440)
         case .completed:
+            CGSize(width: 460, height: 340)
+        case .endedEarly:
             CGSize(width: 460, height: 340)
         case .interrupted:
             CGSize(width: 560, height: 440)
@@ -116,7 +126,11 @@ enum StayPanePanelPresentation: String, CaseIterable, Equatable, Sendable {
             CGSize(width: 520, height: 440)
         case .active:
             CGSize(width: 420, height: 340)
+        case .recovery:
+            CGSize(width: 500, height: 380)
         case .completed:
+            CGSize(width: 420, height: 300)
+        case .endedEarly:
             CGSize(width: 420, height: 300)
         case .interrupted:
             CGSize(width: 500, height: 380)
@@ -131,8 +145,12 @@ enum StayPanePanelPresentation: String, CaseIterable, Equatable, Sendable {
             "Review Session"
         case .active:
             "Focus Session"
+        case .recovery:
+            "Resuming Session"
         case .completed:
             "Session Complete"
+        case .endedEarly:
+            "Session Ended Early"
         case .interrupted:
             "Session Interrupted"
         }

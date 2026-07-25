@@ -444,6 +444,11 @@ struct StayPaneMenuView: View {
                             ? "checkmark.circle"
                             : "exclamationmark.triangle"
                     )
+                    reviewRow(
+                        title: "Completion feedback",
+                        value: "Status Panel and menu bar always; notifications optional",
+                        systemImage: "bell"
+                    )
                     if !launchAtLoginModel.isEffective {
                         restartRecoveryNotice
                     }
@@ -557,7 +562,7 @@ struct StayPaneMenuView: View {
             }
             .frame(maxWidth: .infinity)
 
-            floatingTimerControls
+            floatingTimerMenu
 
             Button("End Session Early…", role: .destructive) {
                 model.requestEarlyReset()
@@ -630,7 +635,7 @@ struct StayPaneMenuView: View {
             Text("Focus time remaining: \(model.formattedRemainingTime)")
                 .font(.caption.monospacedDigit().weight(.medium))
 
-            floatingTimerControls
+            floatingTimerMenu
 
             honestBoundaryNote
         }
@@ -818,44 +823,37 @@ struct StayPaneMenuView: View {
             .foregroundStyle(.secondary)
     }
 
-    private var floatingTimerControls: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Button(
-                    floatingTimerPreferences.value.isVisible
-                        ? "Hide Floating Timer"
-                        : "Show Floating Timer"
-                ) {
-                    floatingTimerPreferences.setVisible(
-                        !floatingTimerPreferences.value.isVisible
-                    )
-                }
-                .buttonStyle(.bordered)
-
-                if floatingTimerPreferences.value.isVisible {
-                    Button(
-                        floatingTimerPreferences.value.isCollapsed
-                            ? "Expand Floating Timer"
-                            : "Collapse Floating Timer"
-                    ) {
-                        floatingTimerPreferences.toggleCollapsed()
-                    }
-                    .buttonStyle(.bordered)
-                }
+    private var floatingTimerMenu: some View {
+        Menu {
+            Button(
+                floatingTimerPreferences.value.isVisible
+                    ? "Hide Floating Timer"
+                    : "Show Floating Timer"
+            ) {
+                floatingTimerPreferences.setVisible(
+                    !floatingTimerPreferences.value.isVisible
+                )
             }
             if floatingTimerPreferences.value.isVisible {
-                HStack {
-                    Button("Move to Top Right") {
-                        floatingTimerPreferences.resetPosition()
-                    }
-                    .buttonStyle(.bordered)
+                Button(
+                    floatingTimerPreferences.value.isCollapsed
+                        ? "Expand Floating Timer"
+                        : "Collapse Floating Timer"
+                ) {
+                    floatingTimerPreferences.toggleCollapsed()
+                }
+                Divider()
+                Button("Move to Top Right") {
+                    floatingTimerPreferences.resetPosition()
                 }
             }
-            Text("The Floating Timer stays above work. Drag it to move, resize from any edge, and collapse or hide it without affecting the menu-bar countdown.")
-                .font(.caption2)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+        } label: {
+            Label("Floating Timer", systemImage: "timer")
         }
+        .menuStyle(.button)
+        .accessibilityHint(
+            floatingTimerPreferenceSummary
+        )
     }
 
     private var floatingTimerPreferenceSummary: String {
