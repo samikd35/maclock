@@ -11,6 +11,9 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
     private var floatingTimerController: FloatingTimerController?
     private var panelController: StayPanePanelController?
     private var openPanelShortcutController: OpenPanelShortcutController?
+    private var auxiliaryWindowControllers: [
+        StayPaneAuxiliaryWindow: StayPaneAuxiliaryWindowController
+    ] = [:]
 
     func configure(
         model: StayPaneModel,
@@ -78,8 +81,112 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        panelController?.showPanel()
+        showPanel()
         return true
+    }
+
+    func showPanel() {
+        panelController?.showPanel()
+    }
+
+    func closePanel() {
+        panelController?.closePanel()
+    }
+
+    func showAuxiliaryWindow(_ kind: StayPaneAuxiliaryWindow) {
+        guard let interfaceModel,
+              let floatingTimerPreferences,
+              let launchAtLoginModel
+        else {
+            return
+        }
+        if let existing = auxiliaryWindowControllers[kind] {
+            existing.present()
+            return
+        }
+
+        let controller: StayPaneAuxiliaryWindowController
+        switch kind {
+        case .settings:
+            controller = StayPaneAuxiliaryWindowController(
+                title: "StayPane Settings",
+                contentSize: CGSize(width: 620, height: 500),
+                minimumContentSize: CGSize(width: 540, height: 420),
+                rootView: AnyView(
+                    StayPaneSettingsView(
+                        model: interfaceModel,
+                        floatingTimerPreferences: floatingTimerPreferences,
+                        launchAtLoginModel: launchAtLoginModel
+                    )
+                )
+            )
+        case .help:
+            controller = StayPaneAuxiliaryWindowController(
+                title: "StayPane Setup & Help",
+                contentSize: CGSize(width: 680, height: 650),
+                minimumContentSize: CGSize(width: 560, height: 480),
+                rootView: AnyView(
+                    StayPaneHelpView(model: interfaceModel)
+                )
+            )
+        case .history:
+            controller = StayPaneAuxiliaryWindowController(
+                title: "StayPane Session History",
+                contentSize: CGSize(width: 620, height: 520),
+                minimumContentSize: CGSize(width: 500, height: 380),
+                rootView: AnyView(
+                    StayPaneHistoryView(model: interfaceModel)
+                )
+            )
+        }
+        auxiliaryWindowControllers[kind] = controller
+        controller.present()
+    }
+
+    func performPrimarySessionAction() {
+        guard let interfaceModel else {
+            return
+        }
+        switch presentationState(for: interfaceModel) {
+        case .review:
+            guard interfaceModel.canReview else {
+                return
+            }
+            interfaceModel.startCountdown()
+        case .setup:
+            guard interfaceModel.canReview else {
+                return
+            }
+            interfaceModel.beginReview()
+        case .onboarding, .countdown, .recovering, .active, .resetPending,
+             .completed, .endedEarly, .interrupted:
+            break
+        }
+    }
+
+    func cancelSessionNavigation() {
+        guard let interfaceModel else {
+            return
+        }
+        switch presentationState(for: interfaceModel) {
+        case .review:
+            interfaceModel.isReviewing = false
+        case .countdown:
+            interfaceModel.cancelCountdown()
+        case .onboarding, .setup, .recovering, .active, .resetPending,
+             .completed, .endedEarly, .interrupted:
+            break
+        }
+    }
+
+    private func presentationState(
+        for model: StayPaneModel
+    ) -> StayPaneSessionPresentationState {
+        StayPaneSessionPresentationState.resolve(
+            state: model.state,
+            isReviewing: model.isReviewing,
+            isOnboardingPresented: model.shouldPresentOnboarding
+        )
     }
 
     @objc
@@ -114,16 +221,61 @@ struct StayPaneApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            StayPaneMenuView(
+            StayPaneMenuBarView(
                 model: model,
                 floatingTimerPreferences: floatingTimerPreferences,
-                launchAtLoginModel: launchAtLoginModel
+                openStatusPanel: {
+                    appDelegate.showPanel()
+                }
             )
         } label: {
             Label(model.menuBarTitle, systemImage: "rectangle.inset.filled.and.person.filled")
         }
         .menuBarExtraStyle(.window)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    appDelegate.showAuxiliaryWindow(.settings)
+                }
+                .keyboardShortcut(",")
+            }
+            CommandGroup(after: .windowArrangement) {
+                Button("Session History") {
+                    appDelegate.showAuxiliaryWindow(.history)
+                }
+                Button("Setup & Help") {
+                    appDelegate.showAuxiliaryWindow(.help)
+                }
+                .keyboardShortcut("?")
+            }
+            CommandMenu("Session") {
+                Button("Find Targets") {
+                    appDelegate.showPanel()
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(
+                            name: .stayPaneFocusTargetSearch,
+                            object: nil
+                        )
+                    }
+                }
+                .keyboardShortcut("f")
+
+                Button(
+                    model.isReviewing
+                        ? "Start Session"
+                        : "Review Session"
+                ) {
+                    appDelegate.performPrimarySessionAction()
+                }
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(!canPerformPrimarySessionAction)
+
+                Button("Back or Cancel Countdown") {
+                    appDelegate.cancelSessionNavigation()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .disabled(!sessionPresentationState.supportsCancelNavigation)
+            }
             CommandGroup(replacing: .appTermination) {
                 Button("Quit StayPane") {
                     NSApplication.shared.terminate(nil)
@@ -131,5 +283,17 @@ struct StayPaneApp: App {
                 .keyboardShortcut("q")
             }
         }
+    }
+
+    private var canPerformPrimarySessionAction: Bool {
+        sessionPresentationState.supportsPrimaryAction && model.canReview
+    }
+
+    private var sessionPresentationState: StayPaneSessionPresentationState {
+        StayPaneSessionPresentationState.resolve(
+            state: model.state,
+            isReviewing: model.isReviewing,
+            isOnboardingPresented: model.shouldPresentOnboarding
+        )
     }
 }

@@ -409,6 +409,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             }
             && selectedBrowserIntegrationsReady
             && SessionDuration(seconds: durationSeconds) != nil
+            && durationValidationMessage == nil
     }
 
     var chromeSetupState: ChromeSetupState {
@@ -495,6 +496,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     var hasProtectedSession: Bool {
         state.requiresControlledQuit
+    }
+
+    var pendingRestorationCount: Int {
+        enforcement.pendingRestorationCount
     }
 
     var sessionPresence: SessionPresence {
@@ -880,6 +885,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
     }
 
+    func setDurationDraftValidationMessage(_ message: String?) {
+        durationValidationMessage = message
+    }
+
     func resetDurationToDefault() {
         durationSeconds = SessionDuration.default.seconds
         updateDuration()
@@ -1128,6 +1137,10 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     }
 
     func startAnotherSession() {
+        startNewSession()
+    }
+
+    func startNewSession() {
         clearNotice()
         engine.beginConfiguration(duration: currentValidDuration())
         selectedTargetIDs = []
@@ -1135,6 +1148,53 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         quitCoordinator.cancelDeferredQuit()
         synchronizeWithEngine()
         refreshApplications()
+    }
+
+    func reuseLastSessionSetup() {
+        let previousTargets = terminalTargets
+        clearNotice()
+        engine.beginConfiguration(duration: currentValidDuration())
+        selectedTargetIDs = []
+        isReviewing = false
+        quitCoordinator.cancelDeferredQuit()
+        synchronizeWithEngine()
+
+        let nativeWindowApplicationIDs = Set(
+            previousTargets.compactMap { target -> String? in
+            guard case let .window(window) = target else {
+                return nil
+            }
+            return window.application.bundleIdentifier
+            }
+        )
+        for applicationID in nativeWindowApplicationIDs {
+            expandedApplicationIDs.insert(applicationID)
+        }
+        refreshApplications()
+        synchronizeBrowserPresentation()
+
+        let liveTargets = previousTargets.compactMap {
+            liveTarget(reusing: $0)
+        }
+        let partition = TargetReusePolicy.partition(
+            previousIDs: previousTargets.map(\.id),
+            availableIDs: liveTargets.map(\.id)
+        )
+        let retainedIDs = Set(partition.retained)
+        for target in liveTargets where retainedIDs.contains(target.id) {
+            engine.select(target: target)
+        }
+        synchronizeWithEngine()
+
+        if partition.dropped.isEmpty {
+            showNotice(
+                "The previous duration and available Targets are ready to review."
+            )
+        } else {
+            showNotice(
+                "\(partition.dropped.count) previous Target\(partition.dropped.count == 1 ? " was" : "s were") no longer available and \(partition.dropped.count == 1 ? "was" : "were") removed."
+            )
+        }
     }
 
     func requestHistoryClear() {
@@ -1655,6 +1715,71 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             return
         }
         requestEarlyReset()
+    }
+
+    private var terminalTargets: [SessionTarget] {
+        switch state {
+        case let .completed(session):
+            session.plan.targets
+        case let .endedEarly(session):
+            session.plan.targets
+        case let .interrupted(session):
+            session.plan.targets
+        case .idle, .configuring, .ready, .starting, .recovering,
+             .enforcing, .resetPending:
+            []
+        }
+    }
+
+    private func liveTarget(
+        reusing previousTarget: SessionTarget
+    ) -> SessionTarget? {
+        switch previousTarget {
+        case let .application(previousApplication):
+            return applications.first {
+                $0.id == previousApplication.bundleIdentifier
+                    && $0.isAvailable
+            }.map {
+                .application($0.target)
+            }
+
+        case let .window(previousWindow):
+            return windowsByApplicationID.values
+                .joined()
+                .first { $0.id == previousWindow.id }
+                .map(SessionTarget.window)
+
+        case let .browserWindow(previousWindow):
+            return browserWindowsByApplicationID.values
+                .joined()
+                .first {
+                    $0.targetIdentifier
+                        == previousWindow.targetIdentifier
+                }
+                .map(SessionTarget.browserWindow)
+
+        case let .browserTab(previousTab):
+            guard let liveTab = browserTabsByApplicationID.values
+                .joined()
+                .first(where: {
+                    $0.targetIdentifier == previousTab.targetIdentifier
+                })
+            else {
+                return nil
+            }
+            return .browserTab(
+                BrowserTabTarget(
+                    profileIdentifier: liveTab.profileIdentifier,
+                    tabIdentifier: liveTab.tabIdentifier,
+                    windowIdentifier: liveTab.windowIdentifier,
+                    title: liveTab.title,
+                    url: liveTab.url,
+                    faviconPNGData: liveTab.faviconPNGData,
+                    application: liveTab.application,
+                    navigationScope: previousTab.navigationScope
+                )
+            )
+        }
     }
 
     private func durationFromEngine() -> Int {

@@ -7,7 +7,7 @@ These checks cover real macOS permission prompts, System Settings links, keyboar
 1. Launch StayPane without completed onboarding. Confirm the Status Panel opens the First-Run Onboarding checklist before ordinary Session setup.
 2. Read the honest-boundary card. It must state that StayPane is a self-control tool rather than tamper-proof security and name Force Quit, administrator changes, source modification, permission revocation, and companion disablement as deliberate bypasses.
 3. Confirm the same card explains Fail Open and says Session state, minimal History, redacted Diagnostics, and optional browser messages remain local. It must not claim an account, cloud service, analytics, telemetry, automatic crash upload, or background update checks.
-4. Relaunch before completing the checklist. Onboarding must still appear. Complete Accessibility verification, choose **Continue to Session Setup**, relaunch, and confirm ordinary setup appears. Use **Open Setup & Privacy Guide** to revisit the checklist.
+4. Relaunch before completing the checklist. Onboarding must still appear. Complete Accessibility verification, choose **Continue to Session Setup**, relaunch, and confirm ordinary setup appears. Use **Setup & Help** to revisit the instructions.
 
 ## Accessibility permission states and harmless verification
 

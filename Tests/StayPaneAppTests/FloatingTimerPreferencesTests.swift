@@ -16,7 +16,7 @@ import Testing
             == FloatingTimerPreferences(
                 isVisible: true,
                 isCollapsed: false,
-                size: .medium,
+                scale: 0.5,
                 origin: nil
             )
     )
@@ -38,51 +38,60 @@ import Testing
             == FloatingTimerPreferences(
                 isVisible: true,
                 isCollapsed: true,
-                size: .medium,
+                scale: 0.5,
                 origin: CGPoint(x: 320, y: 180)
             )
     )
 }
 
 @MainActor
-@Test func floatingTimerSizeControlsClampAndPersistAcrossRelaunch() {
+@Test func floatingTimerScaleClampsAndPersistsAcrossRelaunch() {
     let (defaults, suiteName) = makeDefaults()
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let preferences = FloatingTimerPreferenceModel(defaults: defaults)
 
-    preferences.increaseSize()
-    preferences.increaseSize()
-    #expect(preferences.value.size == .large)
+    preferences.setScale(2)
+    #expect(preferences.value.scale == 1)
     #expect(!preferences.canIncreaseSize)
 
     let largeReload = FloatingTimerPreferenceModel(defaults: defaults)
-    #expect(largeReload.value.size == .large)
+    #expect(largeReload.value.scale == 1)
 
-    largeReload.decreaseSize()
-    largeReload.decreaseSize()
-    largeReload.decreaseSize()
-    #expect(largeReload.value.size == .small)
+    largeReload.setScale(-1)
+    #expect(largeReload.value.scale == 0)
     #expect(!largeReload.canDecreaseSize)
 
     let smallReload = FloatingTimerPreferenceModel(defaults: defaults)
-    #expect(smallReload.value.size == .small)
+    #expect(smallReload.value.scale == 0)
+}
+
+@MainActor
+@Test func legacyFloatingTimerSizeMigratesToContinuousScale() {
+    let (defaults, suiteName) = makeDefaults()
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    defaults.set("large", forKey: "floatingTimerSize")
+
+    let preferences = FloatingTimerPreferenceModel(defaults: defaults)
+
+    #expect(preferences.value.scale == 1)
+    #expect(defaults.double(forKey: "floatingTimerScale") == 1)
 }
 
 @Test func floatingTimerSizesChangeExpandedAndCollapsedGeometry() {
     let small = FloatingTimerLayoutMetrics.resolve(
-        size: .small,
+        scale: 0,
         isCollapsed: false
     )
     let medium = FloatingTimerLayoutMetrics.resolve(
-        size: .medium,
+        scale: 0.5,
         isCollapsed: false
     )
     let large = FloatingTimerLayoutMetrics.resolve(
-        size: .large,
+        scale: 1,
         isCollapsed: false
     )
     let collapsed = FloatingTimerLayoutMetrics.resolve(
-        size: .medium,
+        scale: 0.5,
         isCollapsed: true
     )
 
@@ -111,12 +120,13 @@ import Testing
 @Test func floatingTimerPanelSupportsKeyboardControlsAndFullScreenSpaces() {
     let panel = FloatingTimerPanel(
         contentRect: .zero,
-        styleMask: [.borderless, .nonactivatingPanel],
+        styleMask: [.borderless, .nonactivatingPanel, .resizable],
         backing: .buffered,
         defer: false
     )
 
     #expect(panel.canBecomeKey)
+    #expect(panel.styleMask.contains(.resizable))
     #expect(
         FloatingTimerPanel.requiredCollectionBehavior
             .contains(.canJoinAllApplications)
@@ -128,9 +138,9 @@ import Testing
 }
 
 @Test func collapsedTimerFitsTheLongestSupportedCountdownAtEverySize() {
-    for size in FloatingTimerSize.allCases {
+    for scale in [0.0, 0.5, 1.0] {
         let metrics = FloatingTimerLayoutMetrics.resolve(
-            size: size,
+            scale: scale,
             isCollapsed: true
         )
         let font = NSFont.monospacedDigitSystemFont(
@@ -148,6 +158,28 @@ import Testing
 
         #expect(metrics.contentSize.width >= requiredWidth)
     }
+}
+
+@Test func floatingTimerResizeGeometryReturnsCanonicalProportionalSizes() {
+    let current = FloatingTimerLayoutMetrics.resolve(
+        scale: 0.5,
+        isCollapsed: false
+    ).contentSize
+    let proposed = CGSize(width: 520, height: current.height)
+
+    let scale = FloatingTimerResizeGeometry.scale(
+        forProposedSize: proposed,
+        currentSize: current,
+        currentScale: 0.5,
+        isCollapsed: false
+    )
+    let canonical = FloatingTimerLayoutMetrics.resolve(
+        scale: scale,
+        isCollapsed: false
+    ).contentSize
+
+    #expect(scale == 1)
+    #expect(canonical == CGSize(width: 520, height: 116))
 }
 
 private func makeDefaults() -> (UserDefaults, String) {

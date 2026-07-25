@@ -3,13 +3,61 @@ import SwiftUI
 struct FloatingTimerView: View {
     @ObservedObject var model: StayPaneModel
     @ObservedObject var preferences: FloatingTimerPreferenceModel
+    @State private var isHovering = false
 
     var body: some View {
         let metrics = FloatingTimerLayoutMetrics.resolve(
-            size: preferences.value.size,
+            scale: preferences.value.scale,
             isCollapsed: preferences.value.isCollapsed
         )
-        return HStack(spacing: metrics.spacing) {
+        return styledTimer(metrics: metrics)
+    }
+
+    private func styledTimer(
+        metrics: FloatingTimerLayoutMetrics
+    ) -> some View {
+        timerContents(metrics: metrics)
+            .padding(.horizontal, metrics.horizontalPadding)
+            .padding(.vertical, metrics.verticalPadding)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity
+            )
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(
+                        timerBorderColor,
+                        lineWidth: isHovering ? 1.5 : 1
+                    )
+            }
+            .overlay(alignment: .bottomTrailing) {
+                resizeAffordance(metrics: metrics)
+            }
+            .contentShape(Capsule())
+            .onHover { isHovering = $0 }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("StayPane Floating Timer")
+            .accessibilityValue(
+                "\(model.formattedRemainingTime) remaining, \(preferences.sizeDescription) size"
+            )
+            .accessibilityHint(
+                "Drag the handle to move or resize from an edge. Use adjustable actions to change size."
+            )
+            .accessibilityAdjustableAction { direction in
+                adjustSize(direction)
+            }
+            .accessibilityAction(
+                named: Text("Move Floating Timer to Top Right")
+            ) {
+                preferences.resetPosition()
+            }
+    }
+
+    private func timerContents(
+        metrics: FloatingTimerLayoutMetrics
+    ) -> some View {
+        HStack(spacing: metrics.spacing) {
             dragHandle(fontSize: metrics.iconFontSize)
 
             if preferences.value.isCollapsed {
@@ -43,7 +91,6 @@ struct FloatingTimerView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 2)
-                sizeControls
             }
 
             Button {
@@ -76,55 +123,37 @@ struct FloatingTimerView: View {
             .help("Hide Floating Timer")
             .accessibilityLabel("Hide Floating Timer")
         }
-        .padding(.horizontal, metrics.horizontalPadding)
-        .padding(.vertical, metrics.verticalPadding)
-        .frame(
-            width: metrics.contentSize.width,
-            height: metrics.contentSize.height
-        )
-        .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(.separator.opacity(0.45), lineWidth: 1)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("StayPane Floating Timer")
-        .accessibilityHint(
-            "Drag the handle to move. Use the Move Floating Timer to Top Right action for keyboard or VoiceOver placement."
-        )
-        .accessibilityAction(
-            named: Text("Move Floating Timer to Top Right")
-        ) {
-            preferences.resetPosition()
+    }
+
+    @ViewBuilder
+    private func resizeAffordance(
+        metrics: FloatingTimerLayoutMetrics
+    ) -> some View {
+        if isHovering {
+            Image(systemName: "arrow.down.right")
+                .font(.system(size: max(8, metrics.iconFontSize * 0.55)))
+                .foregroundStyle(.secondary)
+                .padding(max(5, metrics.verticalPadding * 0.7))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 
-    private var sizeControls: some View {
-        HStack(spacing: 5) {
-            Button {
-                preferences.decreaseSize()
-            } label: {
-                Image(systemName: "minus")
-            }
-            .buttonStyle(.plain)
-            .disabled(!preferences.canDecreaseSize)
-            .help("Decrease Floating Timer Size")
-            .accessibilityLabel("Decrease Floating Timer Size")
+    private var timerBorderColor: Color {
+        isHovering
+            ? Color.accentColor.opacity(0.7)
+            : Color(nsColor: .separatorColor).opacity(0.45)
+    }
 
-            Button {
-                preferences.increaseSize()
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.plain)
-            .disabled(!preferences.canIncreaseSize)
-            .help("Increase Floating Timer Size")
-            .accessibilityLabel("Increase Floating Timer Size")
+    private func adjustSize(_ direction: AccessibilityAdjustmentDirection) {
+        switch direction {
+        case .increment:
+            preferences.increaseSize()
+        case .decrement:
+            preferences.decreaseSize()
+        @unknown default:
+            break
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "Floating Timer size: \(preferences.value.size.displayName)"
-        )
     }
 
     private func dragHandle(fontSize: CGFloat) -> some View {

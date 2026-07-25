@@ -13,12 +13,12 @@ These checks validate menu-bar, panel, floating-window, shortcut, full-screen, a
 
 1. Start a Session with the Floating Timer preference visible. Confirm the native Floating Timer appears above ordinary application windows without any browser extension or webpage injection.
 2. Drag it by the visible handle to another position and, when available, another display. It must remain movable and must not activate blocked content.
-3. Use − and + to switch through Small, Medium, and Large. The Floating Timer and countdown must visibly resize, remain completely on a connected display, and continue counting down.
+3. Drag any edge or corner to resize continuously. The Floating Timer and countdown must remain proportional, stay completely on a connected display, and continue counting down. In Settings, verify the size slider and **Reset to Medium** provide keyboard and VoiceOver alternatives.
 4. Collapse it into the compact pill, then expand it. The countdown must remain visible and movable in both layouts.
 5. Hide it from either the Floating Timer or Status Panel. The menu-bar countdown must remain visible and the Status Panel must offer Show Floating Timer.
 6. Show it, move it, resize it, and collapse it. Complete or end the Session, quit while idle, relaunch, and start another short Session. Its saved position, size, and collapsed state must be restored. A Floating Timer hidden during the prior launch defaults to visible again.
 7. Repeat with an allowed application in native full screen. The Floating Timer must remain available as auxiliary native UI without exiting full screen.
-8. Navigate the active Status Panel with the keyboard and VoiceOver. Smaller, Larger, Collapse/Expand, Hide/Show, and Move to Top Right must provide non-drag alternatives for every Floating Timer control.
+8. Navigate the active Status Panel and Settings with the keyboard and VoiceOver. The size slider, Reset to Medium, Collapse/Expand, Hide/Show, and Move to Top Right must provide non-drag alternatives for every Floating Timer control.
 
 ## Global Open-Panel Shortcut
 

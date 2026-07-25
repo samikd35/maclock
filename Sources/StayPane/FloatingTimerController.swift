@@ -26,11 +26,12 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private var cancellables: Set<AnyCancellable> = []
     private var isApplyingFrame = false
+    private var isLiveResizing = false
     private var lastAppliedLayout: AppliedLayout?
 
     private struct AppliedLayout: Equatable {
         let isCollapsed: Bool
-        let size: FloatingTimerSize
+        let scale: Double
         let origin: CGPoint?
     }
 
@@ -49,13 +50,79 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
                 self?.synchronize(with: value)
             }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: NSApplication.didChangeScreenParametersNotification
+        )
+        .sink { [weak self] _ in
+            self?.reclampPanel()
+        }
+        .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(
+            for: NSWorkspace.didWakeNotification
+        )
+        .sink { [weak self] _ in
+            self?.reclampPanel()
+        }
+        .store(in: &cancellables)
     }
 
     func windowDidMove(_ notification: Notification) {
-        guard !isApplyingFrame, let panel else {
+        guard !isApplyingFrame, !isLiveResizing, let panel else {
             return
         }
         preferences.move(to: panel.frame.origin)
+    }
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        isLiveResizing = true
+    }
+
+    func windowWillResize(
+        _ sender: NSWindow,
+        to frameSize: NSSize
+    ) -> NSSize {
+        guard !isApplyingFrame else {
+            return frameSize
+        }
+        let currentContentSize = sender.contentRect(
+            forFrameRect: sender.frame
+        ).size
+        let proposedContentSize = sender.contentRect(
+            forFrameRect: CGRect(origin: .zero, size: frameSize)
+        ).size
+        let scale = FloatingTimerResizeGeometry.scale(
+            forProposedSize: proposedContentSize,
+            currentSize: currentContentSize,
+            currentScale: preferences.value.scale,
+            isCollapsed: preferences.value.isCollapsed
+        )
+        preferences.updateScaleDuringLiveResize(scale)
+        let canonicalContentSize = FloatingTimerLayoutMetrics.resolve(
+            scale: scale,
+            isCollapsed: preferences.value.isCollapsed
+        ).contentSize
+        return sender.frameRect(
+            forContentRect: CGRect(
+                origin: .zero,
+                size: canonicalContentSize
+            )
+        ).size
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        guard let panel else {
+            return
+        }
+        isLiveResizing = false
+        preferences.persistScale()
+        preferences.move(to: panel.frame.origin)
+        lastAppliedLayout = AppliedLayout(
+            isCollapsed: preferences.value.isCollapsed,
+            scale: preferences.value.scale,
+            origin: panel.frame.origin
+        )
     }
 
     private func synchronize(with value: FloatingTimerPreferences) {
@@ -75,7 +142,7 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
     private func makePanel() -> FloatingTimerPanel {
         let panel = FloatingTimerPanel(
             contentRect: .zero,
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -89,6 +156,14 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior =
             FloatingTimerPanel.requiredCollectionBehavior
+        panel.contentMinSize = FloatingTimerLayoutMetrics.resolve(
+            scale: 0,
+            isCollapsed: preferences.value.isCollapsed
+        ).contentSize
+        panel.contentMaxSize = FloatingTimerLayoutMetrics.resolve(
+            scale: 1,
+            isCollapsed: preferences.value.isCollapsed
+        ).contentSize
         panel.delegate = self
         panel.contentView = NSHostingView(
             rootView: FloatingTimerView(
@@ -105,12 +180,16 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
     ) {
         let layout = AppliedLayout(
             isCollapsed: value.isCollapsed,
-            size: value.size,
+            scale: value.scale,
             origin: value.origin
         )
+        if panel.inLiveResize {
+            lastAppliedLayout = layout
+            return
+        }
         if let lastAppliedLayout,
            lastAppliedLayout.isCollapsed == layout.isCollapsed,
-           lastAppliedLayout.size == layout.size,
+           lastAppliedLayout.scale == layout.scale,
            lastAppliedLayout.origin != layout.origin
         {
             if value.origin == panel.frame.origin {
@@ -133,9 +212,17 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
             return
         }
         let metrics = FloatingTimerLayoutMetrics.resolve(
-            size: value.size,
+            scale: value.scale,
             isCollapsed: value.isCollapsed
         )
+        panel.contentMinSize = FloatingTimerLayoutMetrics.resolve(
+            scale: 0,
+            isCollapsed: value.isCollapsed
+        ).contentSize
+        panel.contentMaxSize = FloatingTimerLayoutMetrics.resolve(
+            scale: 1,
+            isCollapsed: value.isCollapsed
+        ).contentSize
         let previousFrame = panel.frame.size == .zero
             ? nil
             : panel.frame
@@ -170,6 +257,29 @@ final class FloatingTimerController: NSObject, NSWindowDelegate {
         lastAppliedLayout = layout
 
         preferences.move(to: panel.frame.origin)
+    }
+
+    private func reclampPanel() {
+        guard let panel, panel.isVisible, !panel.inLiveResize else {
+            return
+        }
+        let origin = constrainedOrigin(
+            panel.frame.origin,
+            size: panel.frame.size,
+            preferredScreen: screen(for: panel.frame) ?? NSScreen.main
+        )
+        guard origin != panel.frame.origin else {
+            return
+        }
+        isApplyingFrame = true
+        panel.setFrameOrigin(origin)
+        isApplyingFrame = false
+        preferences.move(to: origin)
+        lastAppliedLayout = AppliedLayout(
+            isCollapsed: preferences.value.isCollapsed,
+            scale: preferences.value.scale,
+            origin: origin
+        )
     }
 
     private func screen(for frame: CGRect) -> NSScreen? {

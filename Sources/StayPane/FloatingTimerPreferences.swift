@@ -2,41 +2,43 @@ import Combine
 import CoreGraphics
 import Foundation
 
-enum FloatingTimerSize: String, CaseIterable, Equatable, Hashable, Sendable {
+private enum LegacyFloatingTimerSize: String {
     case small
     case medium
     case large
 
-    var displayName: String {
-        rawValue.capitalized
-    }
-
-    func stepped(by offset: Int) -> FloatingTimerSize {
-        guard let currentIndex = Self.allCases.firstIndex(of: self) else {
-            return self
+    var scale: Double {
+        switch self {
+        case .small:
+            0
+        case .medium:
+            0.5
+        case .large:
+            1
         }
-        let destination = min(
-            max(currentIndex + offset, Self.allCases.startIndex),
-            Self.allCases.index(before: Self.allCases.endIndex)
-        )
-        return Self.allCases[destination]
     }
 }
 
 struct FloatingTimerPreferences: Equatable {
     var isVisible: Bool
     var isCollapsed: Bool
-    var size: FloatingTimerSize
+    var scale: Double
     var origin: CGPoint?
 }
 
 @MainActor
 final class FloatingTimerPreferenceModel: ObservableObject {
+    static let minimumScale = 0.0
+    static let defaultScale = 0.5
+    static let maximumScale = 1.0
+    static let accessibilityScaleStep = 0.05
+
     @Published private(set) var value: FloatingTimerPreferences
 
     private enum Key {
         static let isCollapsed = "floatingTimerIsCollapsed"
-        static let size = "floatingTimerSize"
+        static let scale = "floatingTimerScale"
+        static let legacySize = "floatingTimerSize"
         static let originX = "floatingTimerOriginX"
         static let originY = "floatingTimerOriginY"
     }
@@ -56,22 +58,44 @@ final class FloatingTimerPreferenceModel: ObservableObject {
         } else {
             origin = nil
         }
+
+        let scale: Double
+        if defaults.object(forKey: Key.scale) != nil {
+            scale = Self.clamped(defaults.double(forKey: Key.scale))
+        } else if let legacy = LegacyFloatingTimerSize(
+            rawValue: defaults.string(forKey: Key.legacySize) ?? ""
+        ) {
+            scale = legacy.scale
+        } else {
+            scale = Self.defaultScale
+        }
+
         value = FloatingTimerPreferences(
             isVisible: true,
             isCollapsed: defaults.bool(forKey: Key.isCollapsed),
-            size: FloatingTimerSize(
-                rawValue: defaults.string(forKey: Key.size) ?? ""
-            ) ?? .medium,
+            scale: scale,
             origin: origin
         )
+        defaults.set(scale, forKey: Key.scale)
     }
 
     var canDecreaseSize: Bool {
-        value.size != .small
+        value.scale > Self.minimumScale
     }
 
     var canIncreaseSize: Bool {
-        value.size != .large
+        value.scale < Self.maximumScale
+    }
+
+    var sizeDescription: String {
+        switch value.scale {
+        case ..<0.25:
+            "Small"
+        case 0.75...:
+            "Large"
+        default:
+            "Medium"
+        }
     }
 
     func setVisible(_ isVisible: Bool) {
@@ -95,19 +119,31 @@ final class FloatingTimerPreferenceModel: ObservableObject {
     }
 
     func decreaseSize() {
-        setSize(value.size.stepped(by: -1))
+        adjustScale(by: -Self.accessibilityScaleStep)
     }
 
     func increaseSize() {
-        setSize(value.size.stepped(by: 1))
+        adjustScale(by: Self.accessibilityScaleStep)
     }
 
-    func setSize(_ size: FloatingTimerSize) {
-        guard value.size != size else {
-            return
-        }
-        value.size = size
-        save()
+    func adjustScale(by offset: Double) {
+        setScale(value.scale + offset)
+    }
+
+    func setScale(_ scale: Double) {
+        setScale(scale, persist: true)
+    }
+
+    func updateScaleDuringLiveResize(_ scale: Double) {
+        setScale(scale, persist: false)
+    }
+
+    func persistScale() {
+        defaults.set(value.scale, forKey: Key.scale)
+    }
+
+    func resetScale() {
+        setScale(Self.defaultScale)
     }
 
     func move(to origin: CGPoint?) {
@@ -122,9 +158,27 @@ final class FloatingTimerPreferenceModel: ObservableObject {
         move(to: nil)
     }
 
+    private func setScale(_ scale: Double, persist: Bool) {
+        let clampedScale = Self.clamped(scale)
+        guard value.scale != clampedScale else {
+            if persist {
+                persistScale()
+            }
+            return
+        }
+        value.scale = clampedScale
+        if persist {
+            save()
+        }
+    }
+
+    private static func clamped(_ scale: Double) -> Double {
+        min(max(scale, minimumScale), maximumScale)
+    }
+
     private func save() {
         defaults.set(value.isCollapsed, forKey: Key.isCollapsed)
-        defaults.set(value.size.rawValue, forKey: Key.size)
+        defaults.set(value.scale, forKey: Key.scale)
         if let origin = value.origin {
             defaults.set(origin.x, forKey: Key.originX)
             defaults.set(origin.y, forKey: Key.originY)

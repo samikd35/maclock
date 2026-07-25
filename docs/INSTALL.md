@@ -67,7 +67,7 @@ Then load the companion:
 
 ### Verify the Bridge Connection
 
-Open **Setup & Privacy Guide** in StayPane and choose **Test Connection**. Each configured Chrome Profile moves from Synchronizing to Ready after its first current Tab Snapshot. A missing companion, unsupported Incognito capability, identity mismatch, or failed Native Bridge remains visible and prevents affected Browser Window Targets or Tab Targets from passing preflight.
+Open **Setup & Help** in StayPane and choose **Test Connection**. Each configured Chrome Profile moves from Synchronizing to Ready after its first current Tab Snapshot. A missing companion, unsupported Incognito capability, identity mismatch, or failed Native Bridge remains visible and prevents affected Browser Window Targets or Tab Targets from passing preflight.
 
 The registered manifest is stored at:
 
