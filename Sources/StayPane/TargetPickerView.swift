@@ -56,6 +56,36 @@ struct TargetPickerView: View {
         ) { _ in
             isSearchFocused = true
         }
+        .onKeyPress(.upArrow) {
+            moveApplicationFocus(by: -1)
+        }
+        .onKeyPress(.downArrow) {
+            moveApplicationFocus(by: 1)
+        }
+        .onKeyPress(.return) {
+            guard let focusedApplication else {
+                return .ignored
+            }
+            focusApplication(focusedApplication)
+            return .handled
+        }
+        .onKeyPress(.space) {
+            guard let focusedApplication,
+                  focusedApplication.isAvailable
+                    || model.selectedApplicationIDs.contains(
+                        focusedApplication.id
+                    )
+            else {
+                return .ignored
+            }
+            model.setApplication(
+                id: focusedApplication.id,
+                isSelected: !model.selectedApplicationIDs.contains(
+                    focusedApplication.id
+                )
+            )
+            return .handled
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Target picker")
     }
@@ -693,6 +723,23 @@ struct TargetPickerView: View {
         for application in model.applications where application.isRunning {
             model.refreshWindows(for: application.id)
         }
+    }
+
+    private func moveApplicationFocus(
+        by offset: Int
+    ) -> KeyPress.Result {
+        guard !visibleApplications.isEmpty else {
+            return .ignored
+        }
+        let currentIndex = visibleApplications.firstIndex {
+            $0.id == focusedApplicationID
+        } ?? (offset > 0 ? -1 : visibleApplications.count)
+        let nextIndex = min(
+            max(currentIndex + offset, 0),
+            visibleApplications.count - 1
+        )
+        focusApplication(visibleApplications[nextIndex])
+        return .handled
     }
 
     private func shortLabel(for target: SessionTarget) -> String {
