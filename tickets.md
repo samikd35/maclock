@@ -12,7 +12,7 @@ Work the **frontier**: any ticket whose blockers are all complete. Tickets 2, 3,
 
 **Blocked by:** None — can start immediately.
 
-- [x] A source build launches as a native menu-bar application on Apple silicon with macOS 26 or newer.
+- [x] A source build installs as a native Dock and menu-bar application on Apple silicon with macOS 26 or newer.
 - [x] First use explains Accessibility permission, opens the relevant System Settings area, and verifies that control works before enabling Start.
 - [x] The duration defaults to 30 minutes, accepts 10 seconds through 24 hours, remembers the last value, and can reset to 30 minutes.
 - [x] The picker lists running applications with recognizable names and icons and requires one selection.

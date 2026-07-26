@@ -44,6 +44,46 @@ final class OnboardingProgressStore {
     }
 }
 
+final class InstalledAccessibilityMigrationStore {
+    private static let completionKey =
+        "hasCompletedInstalledAccessibilityMigration"
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var isCompleted: Bool {
+        defaults.bool(forKey: Self.completionKey)
+    }
+
+    func markCompleted() {
+        defaults.set(true, forKey: Self.completionKey)
+    }
+
+    static func isInstalledApplication(
+        bundleURL: URL,
+        homeDirectoryURL: URL
+    ) -> Bool {
+        let installedURL = homeDirectoryURL
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("StayPane.app", isDirectory: true)
+        return bundleURL.resolvingSymlinksInPath().standardizedFileURL
+            == installedURL.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    static func shouldPresent(
+        isInstalledApplication: Bool,
+        accessibilityVerified: Bool,
+        migrationCompleted: Bool
+    ) -> Bool {
+        isInstalledApplication
+            && !accessibilityVerified
+            && !migrationCompleted
+    }
+}
+
 struct AccessibilityVerificationResult: Equatable {
     let isAuthorized: Bool
     let verificationSucceeded: Bool

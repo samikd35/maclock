@@ -42,6 +42,7 @@ for required_text in \
     "git clone" \
     "make verify" \
     "make setup-chrome" \
+    "make install" \
     "make run" \
     "Developer mode" \
     "Load unpacked" \
@@ -114,6 +115,13 @@ test -f "$REDACTOR_PATH" || fail "release-log redactor is missing"
 test -f "$WORKFLOW_PATH" || fail "GitHub verification workflow is missing"
 grep -Eq '^verify:' "$REPOSITORY_ROOT/Makefile" \
     || fail "Makefile has no public verify target"
+grep -Eq '^install:' "$REPOSITORY_ROOT/Makefile" \
+    || fail "Makefile has no public install target"
+grep -Eq '^setup-chrome-dev:' "$REPOSITORY_ROOT/Makefile" \
+    || fail "Makefile has no explicit development Chrome setup target"
+grep -Fq -- '--manifest-directory' \
+    "$REPOSITORY_ROOT/Sources/StayPaneBridge/main.swift" \
+    || fail "Native Bridge cannot register into a hermetic manifest directory"
 grep -Fq "make verify" "$WORKFLOW_PATH" \
     || fail "GitHub workflow does not use the public verify target"
 grep -Fq "node-version: 22" "$WORKFLOW_PATH" \
@@ -143,5 +151,19 @@ grep -Fq '<redacted-url>' <<<"$REDACTED_SAMPLE" \
 if grep -Fq 'private.example' <<<"$REDACTED_SAMPLE"; then
     fail "release logs retain a private URL"
 fi
+
+INFO_PATH="$REPOSITORY_ROOT/Resources/StayPane-Info.plist"
+if plutil -extract LSUIElement raw -o - "$INFO_PATH" >/dev/null 2>&1; then
+    [[ "$(plutil -extract LSUIElement raw -o - "$INFO_PATH")" == "false" ]] \
+        || fail "StayPane is still configured as a Dock-hidden UI element"
+fi
+[[ "$(
+    plutil -extract LSApplicationCategoryType raw -o - "$INFO_PATH"
+)" == "public.app-category.productivity" ]] \
+    || fail "StayPane does not declare the Productivity app category"
+[[ "$(
+    plutil -extract CFBundleIconFile raw -o - "$INFO_PATH"
+)" == "StayPane.icns" ]] \
+    || fail "StayPane does not declare its packaged application icon"
 
 echo "Release documentation contract passed."

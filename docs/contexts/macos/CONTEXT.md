@@ -31,6 +31,10 @@ A single write-ahead record showing that StayPane was interrupted while changing
 The native StayPane interface that presents setup while idle and immutable Session status while enforcement is active.
 _Avoid_: Popup, dashboard, setup window
 
+**Dock and Menu-Bar Presence**:
+The installed regular application remains available in the Dock and Command-Tab while running and simultaneously exposes its menu-bar item. Closing the Status Panel does not quit either presence; opening the app or clicking its Dock icon reveals the Status Panel again.
+_Avoid_: Menu-bar-only app, separate Dock helper
+
 **First-Run Onboarding**:
 The locally persisted introductory checklist that explains the honest self-control boundary, local-only privacy, Accessibility setup, optional Chrome setup, notification-independent completion feedback, and the Focus Reminder before ordinary Session setup.
 _Avoid_: Account setup, signup, tutorial tour

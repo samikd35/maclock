@@ -80,6 +80,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var nativeBridgeConnected = false
     @Published private(set) var browserProfiles: [BrowserProfilePresentation] = []
     @Published private(set) var nativeHostRegistered = false
+    @Published private(set) var nativeHostRegistrationNeedsRepair = false
     @Published private(set) var selectedTargetIDs: Set<TargetIdentifier> = []
     @Published var expandedApplicationIDs: Set<String> = []
     @Published var durationSeconds: Int
@@ -88,6 +89,7 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     @Published private(set) var accessibilityGranted = false
     @Published private(set) var accessibilitySetupState: AccessibilitySetupState
     @Published private(set) var shouldExplainAccessibility = true
+    @Published private(set) var shouldShowInstalledAccessibilityMigration: Bool
     @Published private(set) var isOnboardingPresented: Bool
     @Published var isReviewing = false
     @Published private(set) var remainingTime: TimeInterval = 0
@@ -99,6 +101,9 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
 
     private let defaults: UserDefaults
     private let onboardingWorkflow: AccessibilityOnboardingWorkflow
+    private let installedAccessibilityMigrationStore:
+        InstalledAccessibilityMigrationStore
+    private let isInstalledApplicationCopy: Bool
     private let permissionClient: AccessibilityPermissionClient
     private let applicationCatalog: ApplicationCatalog
     private let windowCatalog: AccessibilityWindowCatalog
@@ -131,6 +136,24 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
             client: permissionClient
         )
         self.onboardingWorkflow = onboardingWorkflow
+        let installedAccessibilityMigrationStore =
+            InstalledAccessibilityMigrationStore(defaults: defaults)
+        self.installedAccessibilityMigrationStore =
+            installedAccessibilityMigrationStore
+        let isInstalledApplicationCopy =
+            InstalledAccessibilityMigrationStore.isInstalledApplication(
+                bundleURL: Bundle.main.bundleURL,
+                homeDirectoryURL:
+                    FileManager.default.homeDirectoryForCurrentUser
+            )
+        self.isInstalledApplicationCopy = isInstalledApplicationCopy
+        shouldShowInstalledAccessibilityMigration =
+            InstalledAccessibilityMigrationStore.shouldPresent(
+                isInstalledApplication: isInstalledApplicationCopy,
+                accessibilityVerified: false,
+                migrationCompleted:
+                    installedAccessibilityMigrationStore.isCompleted
+            )
         isOnboardingPresented = !onboardingWorkflow.progress.isCompleted
         accessibilitySetupState = AccessibilitySetupState.resolve(
             progress: onboardingWorkflow.progress,
@@ -725,6 +748,12 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         }
     }
 
+    var nativeHostRegistrationActionTitle: String {
+        nativeHostRegistered || nativeHostRegistrationNeedsRepair
+            ? "Repair Native Host"
+            : "Register Native Host"
+    }
+
     func openChromeExtensionFolder() {
         guard let directoryURL = chromeExtensionDirectoryURL else {
             showNotice(
@@ -910,6 +939,18 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
         accessibilitySetupState = result.setupState
         if accessibilityGranted {
             shouldExplainAccessibility = false
+            if isInstalledApplicationCopy {
+                installedAccessibilityMigrationStore.markCompleted()
+                shouldShowInstalledAccessibilityMigration = false
+            }
+        } else {
+            shouldShowInstalledAccessibilityMigration =
+                InstalledAccessibilityMigrationStore.shouldPresent(
+                    isInstalledApplication: isInstalledApplicationCopy,
+                    accessibilityVerified: false,
+                    migrationCompleted:
+                        installedAccessibilityMigrationStore.isCompleted
+                )
         }
     }
 
@@ -1614,11 +1655,22 @@ final class StayPaneModel: NSObject, ObservableObject, StayPaneTerminationHandli
     private func refreshNativeHostRegistrationStatus() {
         guard let executableURL = nativeHostExecutableURL else {
             nativeHostRegistered = false
+            nativeHostRegistrationNeedsRepair = false
             return
         }
-        nativeHostRegistered = NativeMessagingHostInstaller().isInstalled(
+        switch NativeMessagingHostInstaller().registrationStatus(
             hostExecutableURL: executableURL
-        )
+        ) {
+        case .installed:
+            nativeHostRegistered = true
+            nativeHostRegistrationNeedsRepair = false
+        case .pointsElsewhere:
+            nativeHostRegistered = false
+            nativeHostRegistrationNeedsRepair = true
+        case .missingOrInvalid:
+            nativeHostRegistered = false
+            nativeHostRegistrationNeedsRepair = false
+        }
     }
 
     private var nativeHostExecutableURL: URL? {

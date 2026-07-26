@@ -146,11 +146,7 @@ struct OnboardingView: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
             HStack {
-                Button(
-                    model.nativeHostRegistered
-                        ? "Repair Native Host"
-                        : "Register Native Host"
-                ) {
+                Button(model.nativeHostRegistrationActionTitle) {
                     model.registerNativeHost()
                 }
                 .buttonStyle(.bordered)

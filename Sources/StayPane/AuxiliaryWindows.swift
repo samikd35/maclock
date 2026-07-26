@@ -180,11 +180,7 @@ struct StayPaneSettingsView: View {
                     value: model.chromeSetupState.title
                 )
                 HStack {
-                    Button(
-                        model.nativeHostRegistered
-                            ? "Repair Native Host"
-                            : "Register Native Host"
-                    ) {
+                    Button(model.nativeHostRegistrationActionTitle) {
                         model.registerNativeHost()
                     }
                     Button("Show Extension Folder") {
@@ -288,7 +284,7 @@ struct StayPaneHelpView: View {
                     systemImage: "hand.raised"
                 ) {
                     Text(
-                        "Accessibility lets StayPane discover, minimize, restore, and refocus app windows. It never reads window pixels and never requests Screen Recording."
+                        "Accessibility lets StayPane discover, minimize, restore, and refocus app windows. It never reads window pixels and never requests Screen Recording. After moving from the development build, remove its old .build entry if present and authorize ~/Applications/StayPane.app."
                     )
                     Text(model.accessibilitySetupState.guidance)
                         .foregroundStyle(.secondary)
@@ -314,11 +310,7 @@ struct StayPaneHelpView: View {
                     )
                     .foregroundStyle(.secondary)
                     HStack {
-                        Button(
-                            model.nativeHostRegistered
-                                ? "Repair Native Host"
-                                : "Register Native Host"
-                        ) {
+                        Button(model.nativeHostRegistrationActionTitle) {
                             model.registerNativeHost()
                         }
                         Button("Show Extension Folder") {

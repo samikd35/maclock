@@ -34,6 +34,12 @@ public enum NativeMessagingHostInstallerError: Error, Equatable, Sendable {
     case hostExecutableMissing
 }
 
+public enum NativeMessagingHostRegistrationStatus: Equatable, Sendable {
+    case missingOrInvalid
+    case installed
+    case pointsElsewhere(URL)
+}
+
 extension NativeMessagingHostInstallerError: LocalizedError {
     public var errorDescription: String? {
         switch self {
@@ -85,6 +91,12 @@ public struct NativeMessagingHostInstaller: Sendable {
     }
 
     public func isInstalled(hostExecutableURL: URL) -> Bool {
+        registrationStatus(hostExecutableURL: hostExecutableURL) == .installed
+    }
+
+    public func registrationStatus(
+        hostExecutableURL: URL
+    ) -> NativeMessagingHostRegistrationStatus {
         let manifestURL = manifestDirectoryURL.appendingPathComponent(
             "\(StayPaneBridgeConstants.nativeHostName).json",
             isDirectory: false
@@ -95,12 +107,21 @@ public struct NativeMessagingHostInstaller: Sendable {
                 from: data
               )
         else {
-            return false
+            return .missingOrInvalid
         }
-        return manifest.name == StayPaneBridgeConstants.nativeHostName
-            && manifest.path == hostExecutableURL.standardizedFileURL.path
-            && manifest.type == "stdio"
-            && manifest.allowedOrigins == [StayPaneBridgeConstants.allowedOrigin]
+        guard manifest.name == StayPaneBridgeConstants.nativeHostName,
+              manifest.type == "stdio",
+              manifest.allowedOrigins == [StayPaneBridgeConstants.allowedOrigin]
+        else {
+            return .missingOrInvalid
+        }
+
+        let registeredExecutableURL = URL(
+            fileURLWithPath: manifest.path
+        ).standardizedFileURL
+        return registeredExecutableURL == hostExecutableURL.standardizedFileURL
+            ? .installed
+            : .pointsElsewhere(registeredExecutableURL)
     }
 
     public static var defaultManifestDirectoryURL: URL {

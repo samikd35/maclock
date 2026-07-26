@@ -11,7 +11,23 @@ do {
         let executableURL = URL(
             fileURLWithPath: CommandLine.arguments[0]
         ).standardizedFileURL
-        let manifestURL = try NativeMessagingHostInstaller().install(
+        let registrationArguments = Array(CommandLine.arguments.dropFirst(2))
+        let installer: NativeMessagingHostInstaller
+        if registrationArguments.isEmpty {
+            installer = NativeMessagingHostInstaller()
+        } else if registrationArguments.count == 2,
+                  registrationArguments[0] == "--manifest-directory"
+        {
+            installer = NativeMessagingHostInstaller(
+                manifestDirectoryURL: URL(
+                    fileURLWithPath: registrationArguments[1],
+                    isDirectory: true
+                )
+            )
+        } else {
+            throw BridgeProtocolError.invalidSchema
+        }
+        let manifestURL = try installer.install(
             hostExecutableURL: executableURL
         )
         print(manifestURL.path)

@@ -23,28 +23,7 @@ final class StayPanePanelController: NSWindowController, NSWindowDelegate {
         )
         presentation = initial
 
-        let panel = NSPanel(
-            contentRect: CGRect(
-                origin: .zero,
-                size: initial.preferredContentSize
-            ),
-            styleMask: [
-                .titled,
-                .closable,
-                .miniaturizable,
-                .resizable,
-                .fullSizeContentView
-            ],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = initial.title
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isReleasedWhenClosed = false
-        panel.level = .normal
-        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.contentMinSize = initial.minimumContentSize
+        let panel = Self.makeWindow(for: initial)
         panel.contentView = NSHostingView(
             rootView: StayPaneMenuView(
                 model: model,
@@ -78,6 +57,34 @@ final class StayPanePanelController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    static func makeWindow(
+        for presentation: StayPanePanelPresentation
+    ) -> NSWindow {
+        let window = NSWindow(
+            contentRect: CGRect(
+                origin: .zero,
+                size: presentation.preferredContentSize
+            ),
+            styleMask: [
+                .titled,
+                .closable,
+                .miniaturizable,
+                .resizable,
+                .fullSizeContentView
+            ],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = presentation.title
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace]
+        window.contentMinSize = presentation.minimumContentSize
+        return window
     }
 
     func showPanel() {

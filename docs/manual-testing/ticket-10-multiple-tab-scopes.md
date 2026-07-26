@@ -4,8 +4,8 @@ These checks cover real Chrome window and tab lifecycle behavior that cannot be 
 
 ## Build and setup
 
-1. Run `make app`, `make test`, and `make test-extension` from the repository root.
-2. Open `.build/StayPane.app`, register the Native Host, and confirm the Chrome companion is connected.
+1. Run `make verify` and `make install` from the repository root.
+2. Open the installed StayPane app, repair the Native Host if requested, and confirm the Chrome companion is connected.
 3. Reload **StayPane Chrome Companion** in `chrome://extensions`. Confirm it reports version 0.5.0, then enable **Allow in Incognito** so the profile is Ready.
 4. Open at least two eligible HTTP or HTTPS tabs in different Chrome windows.
 

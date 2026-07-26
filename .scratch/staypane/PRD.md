@@ -16,7 +16,7 @@ Chrome targets support three levels of breadth: the entire Chrome application, a
 
 StayPane is an honest commitment device, not a security boundary. A normal early exit requires a 30-second enforced countdown and final confirmation, while Force Quit, extension removal, permission revocation, or administrator intervention remain deliberate bypasses. Any unexpected loss of enforcement fails open instead of trapping the user.
 
-The v1 experience is a menu-bar application with a setup window, an optional floating countdown, permission onboarding, minimal local session history, crash and restart recovery, and precise restoration of windows changed by StayPane.
+The v1 experience is a regular macOS application with simultaneous Dock and menu-bar presence, a setup window, an optional floating countdown, permission onboarding, minimal local session history, crash and restart recovery, and precise restoration of windows changed by StayPane.
 
 ## User Stories
 
@@ -191,7 +191,7 @@ The v1 experience is a menu-bar application with a setup window, an optional flo
 - Normal completion stops enforcement immediately, restores eligible windows, records Completed, shows a macOS notification, plays a gentle sound when allowed, and briefly displays Session Complete.
 - Restoration applies only to windows StayPane minimized. Windows already minimized remain minimized; windows closed by the user are not reopened. A failure restoring one window does not block restoration of others.
 - Window state restoration preserves position, size, display, and Space by avoiding changes to those properties. Where macOS prevents exact restoration, StayPane reports the limitation without blocking unlock.
-- The primary interface is a menu-bar application. The setup and active-session panel is reachable from the menu bar and a non-destructive global open-panel shortcut. There are no global start, reset, or quit shortcuts.
+- StayPane is a regular installed macOS application with simultaneous Dock and menu-bar presence. The setup and active-session panel is reachable from the Dock, menu bar, and a non-destructive global open-panel shortcut. Closing the panel keeps the application running. There are no global start, reset, or quit shortcuts.
 - The remaining time appears in the menu bar while active. An optional native floating timer is movable, size-adjustable, collapsible, hideable, and remembers position, size, and collapsed state. It is not injected into webpages.
 - macOS Focus integration is reminder-based in v1. StayPane may open Focus settings and explain notification behavior but does not automate Control Center or use private APIs.
 - First-run onboarding covers the honest boundary, local-only privacy, Accessibility permission, optional Chrome setup, connection verification, and a harmless enforcement test.
