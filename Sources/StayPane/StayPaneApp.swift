@@ -85,6 +85,12 @@ final class StayPaneAppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(
+        _ sender: NSApplication
+    ) -> Bool {
+        false
+    }
+
     func showPanel() {
         panelController?.showPanel()
     }

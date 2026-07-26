@@ -1,6 +1,6 @@
 # Ticket 05 manual acceptance: Session Presence
 
-These checks validate menu-bar, panel, floating-window, shortcut, full-screen, and notification-denial behavior that cannot be proven by the pure presentation tests. Build with `make run` and record the macOS version, StayPane commit, and pass/fail result for each section.
+These checks validate Dock, menu-bar, panel, floating-window, shortcut, full-screen, and notification-denial behavior that cannot be proven by the pure presentation tests. Install with `make install` and record the macOS version, StayPane commit, and pass/fail result for each section.
 
 ## Menu bar and Status Panel
 

@@ -4,8 +4,8 @@ These checks cover real Chrome navigation and tab-creation behavior that the her
 
 ## Build and update the local extension
 
-1. Run `make app`, `make test`, and `make test-extension` from the repository root.
-2. Open `.build/StayPane.app`, register the Native Host, and confirm the Chrome companion is connected.
+1. Run `make verify` and `make install` from the repository root.
+2. Open the installed StayPane app, repair the Native Host if requested, and confirm the Chrome companion is connected.
 3. In `chrome://extensions`, reload **StayPane Chrome Companion** after every rebuild. Version 0.5.0 speaks Native Bridge protocol version 5; an older loaded build cannot start the current browser-enforcement contract. Enable **Allow in Incognito** so the profile is Ready.
 4. Pin the extension if you want to observe its brief orange `SITE` badge.
 

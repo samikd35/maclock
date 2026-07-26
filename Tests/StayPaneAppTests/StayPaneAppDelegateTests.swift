@@ -32,6 +32,17 @@ import Testing
 }
 
 @MainActor
+@Test func closingTheLastWindowKeepsTheDockAndMenuBarApplicationRunning() {
+    let delegate = StayPaneAppDelegate()
+
+    #expect(
+        !delegate.applicationShouldTerminateAfterLastWindowClosed(
+            NSApplication.shared
+        )
+    )
+}
+
+@MainActor
 private final class FakeTerminationHandler: StayPaneTerminationHandling {
     let allowOrdinaryQuit: Bool
     var quitRequestCount = 0

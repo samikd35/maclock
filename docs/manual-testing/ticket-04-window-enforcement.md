@@ -1,6 +1,6 @@
 # Ticket 04 manual acceptance: window enforcement
 
-These checks exercise macOS WindowServer behavior that the hermetic policy suite cannot reproduce. Run them on a supported Mac after `make run`, with Accessibility access granted to StayPane. A 60-second session is long enough for most cases. Do not use documents with unsaved work for restoration tests.
+These checks exercise macOS WindowServer behavior that the hermetic policy suite cannot reproduce. Run them on a supported Mac after `make install`, with Accessibility access granted to the installed StayPane app. A 60-second session is long enough for most cases. Do not use documents with unsaved work for restoration tests.
 
 Record the macOS version, StayPane commit, applications used, display arrangement, and pass/fail result for each row. These steps are the acceptance procedure; they are not marked as executed by the automated suite.
 

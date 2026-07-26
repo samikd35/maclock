@@ -6,6 +6,8 @@
     <string>StayPane</string>
     <key>CFBundleExecutable</key>
     <string>StayPane</string>
+    <key>CFBundleIconFile</key>
+    <string>StayPane.icns</string>
     <key>CFBundleIdentifier</key>
     <string>org.staypane.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -20,8 +22,8 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
-    <key>LSUIElement</key>
-    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
     <key>NSAccessibilityUsageDescription</key>
     <string>StayPane uses Accessibility to minimize blocked app windows and refocus the application you selected.</string>
     <key>NSHighResolutionCapable</key>

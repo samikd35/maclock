@@ -43,6 +43,44 @@ import Testing
         manifest.allowedOrigins
             == ["chrome-extension://hoofhoedlagpoclhkgnkmejaihaapoke/"]
     )
+    #expect(
+        installer.registrationStatus(hostExecutableURL: executableURL)
+            == .installed
+    )
+}
+
+@Test func registrationStatusDistinguishesAStaleExecutablePath() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("StayPaneStaleNativeHostTests")
+        .appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let manifestDirectory = directory.appendingPathComponent(
+        "NativeMessagingHosts"
+    )
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    let installer = NativeMessagingHostInstaller(
+        manifestDirectoryURL: manifestDirectory
+    )
+    let staleExecutable = directory.appendingPathComponent("OldStayPaneBridge")
+    let installedExecutable = directory.appendingPathComponent("StayPaneBridge")
+    for executableURL in [staleExecutable, installedExecutable] {
+        try Data("bridge".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executableURL.path
+        )
+    }
+
+    try installer.install(hostExecutableURL: staleExecutable)
+
+    #expect(
+        installer.registrationStatus(
+            hostExecutableURL: installedExecutable
+        ) == .pointsElsewhere(staleExecutable.standardizedFileURL)
+    )
 }
 
 @Test func registrationRejectsAMissingBridgeExecutable() {

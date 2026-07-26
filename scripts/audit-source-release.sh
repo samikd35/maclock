@@ -35,6 +35,7 @@ for required_path in \
     CONTEXT-MAP.md \
     Package.swift \
     Resources/StayPane-Info.plist \
+    Resources/StayPaneIcon-1024.png \
     ChromeExtension/manifest.json \
     ChromeExtension/package.json \
     docs/INSTALL.md \
@@ -42,7 +43,10 @@ for required_path in \
     docs/contexts/product/CONTEXT.md \
     docs/contexts/macos/CONTEXT.md \
     docs/contexts/chrome/CONTEXT.md \
-    docs/contexts/native-bridge/CONTEXT.md
+    docs/contexts/native-bridge/CONTEXT.md \
+    scripts/atomic-swap.swift \
+    scripts/build-app-icon.sh \
+    scripts/install-user-app.sh
 do
     require_file "$required_path"
 done
@@ -120,11 +124,13 @@ APP_PATH="$REPOSITORY_ROOT/.build/StayPane.app"
 APP_EXECUTABLE="$APP_PATH/Contents/MacOS/StayPane"
 BRIDGE_EXECUTABLE="$APP_PATH/Contents/MacOS/StayPaneBridge"
 PACKAGED_MANIFEST="$APP_PATH/Contents/Resources/ChromeExtension/manifest.json"
+PACKAGED_ICON="$APP_PATH/Contents/Resources/StayPane.icns"
 
 test -d "$APP_PATH" || fail "packaged StayPane.app is missing"
 test -x "$APP_EXECUTABLE" || fail "packaged StayPane executable is missing"
 test -x "$BRIDGE_EXECUTABLE" || fail "packaged Native Bridge is missing"
 test -f "$PACKAGED_MANIFEST" || fail "packaged Chrome companion is missing"
+test -f "$PACKAGED_ICON" || fail "packaged application icon is missing"
 
 codesign --verify --strict "$APP_PATH" \
     || fail "packaged app does not pass code-signature verification"
@@ -152,5 +158,24 @@ PACKAGED_MINIMUM_SYSTEM_VERSION="$(
 )"
 [[ "$PACKAGED_MINIMUM_SYSTEM_VERSION" == "26.0" ]] \
     || fail "packaged app does not require macOS 26.0"
+if plutil -extract LSUIElement raw -o - \
+    "$APP_PATH/Contents/Info.plist" >/dev/null 2>&1
+then
+    [[ "$(
+        plutil -extract LSUIElement raw -o - \
+            "$APP_PATH/Contents/Info.plist"
+    )" == "false" ]] \
+        || fail "packaged app is hidden from the Dock"
+fi
+[[ "$(
+    plutil -extract CFBundleIconFile raw -o - \
+        "$APP_PATH/Contents/Info.plist"
+)" == "StayPane.icns" ]] \
+    || fail "packaged app does not reference StayPane.icns"
+[[ "$(
+    plutil -extract LSApplicationCategoryType raw -o - \
+        "$APP_PATH/Contents/Info.plist"
+)" == "public.app-category.productivity" ]] \
+    || fail "packaged app does not declare the Productivity category"
 
 echo "Packaged source release audit passed."

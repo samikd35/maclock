@@ -22,7 +22,7 @@ git --version
 
 If multiple full Xcode versions are installed, select Xcode 26 before continuing. Full Xcode is optional for the documented Make workflow; the Xcode 26 Command Line Tools are sufficient. StayPane's supported release environment is Apple silicon on macOS 26 or newer even if some package targets happen to compile elsewhere.
 
-## Fresh-clone verification and build
+## Fresh-clone verification and installation
 
 Copy the repository's HTTPS or SSH URL from GitHub, then run:
 
@@ -30,18 +30,24 @@ Copy the repository's HTTPS or SSH URL from GitHub, then run:
 git clone <repository-url> StayPane
 cd StayPane
 make verify
-make run
+make install
 ```
 
-`make verify` installs the locked extension development dependencies, runs the Swift, Native Bridge, extension, privacy, and release-contract checks, builds the release products, packages `.build/StayPane.app`, and audits that package. Its console output is intentionally summarized and redacted; detailed temporary logs are printed in redacted form only when a step fails.
+`make verify` installs the locked extension development dependencies, runs the Swift, Native Bridge, extension, privacy, release-contract, and hermetic installer checks, builds the release products, packages `.build/StayPane.app`, and audits that package. Its console output is intentionally summarized and redacted; detailed temporary logs are printed in redacted form only when a step fails.
 
-`make run` rebuilds the source tree when necessary, creates an ad-hoc-signed local app bundle at `.build/StayPane.app`, and opens it. Ad-hoc signing lets macOS load a locally built bundle; it is not Apple Developer ID signing or notarization. Depending on local security policy, macOS may require an explicit **Open** action or approval under **System Settings → Privacy & Security**. Do not disable Gatekeeper globally.
+`make install` refuses to continue while any StayPane copy is running, builds and verifies the complete bundle, stages it beside the destination, safely replaces an earlier installation, registers the installed Native Bridge, and opens `~/Applications/StayPane.app`. A failed replacement restores the previous installed copy. Preferences, Session History, and Recovery data live outside the bundle and are not removed during updates.
 
-To inspect or compile the Swift package in Xcode, open `Package.swift` with Xcode 26 and build the `StayPane` scheme. Use `make app` for the complete app bundle because it also packages `StayPaneBridge`, the built Chrome companion, `Info.plist`, and the local ad-hoc signature.
+The installed app appears in the user Applications folder, Launchpad, Spotlight, Command-Tab, and the Dock. It keeps its menu-bar item at the same time. Closing the Status Panel does not quit StayPane; click the Dock icon or menu-bar item to reveal it again. Use Command-Q, the application menu, or the Dock's Quit command for the existing controlled Session exit.
+
+The bundle is ad-hoc signed. Ad-hoc signing lets macOS load a locally built bundle; it is not Apple Developer ID signing or notarization. Depending on local security policy, macOS may require an explicit **Open** action or approval under **System Settings → Privacy & Security**. Do not disable Gatekeeper globally.
+
+To inspect or compile the Swift package in Xcode, open `Package.swift` with Xcode 26 and build the `StayPane` scheme. Contributors can use `make run` for the temporary development app at `.build/StayPane.app`. Use `make app` for the complete development bundle because it also packages `StayPaneBridge`, the built Chrome companion, application icon, `Info.plist`, and the local ad-hoc signature.
 
 ## Accessibility and First-Run Onboarding
 
-Open the StayPane menu-bar item and follow First-Run Onboarding. StayPane explains why Accessibility is required and opens **System Settings → Privacy & Security → Accessibility**. Enable the locally built `.build/StayPane.app`, return to StayPane, and run the Harmless Window-Control Verification. StayPane does not need or request Screen Recording.
+Open StayPane from Applications and follow First-Run Onboarding. StayPane explains why Accessibility is required and opens **System Settings → Privacy & Security → Accessibility**. Enable `~/Applications/StayPane.app`, return to StayPane, and run the Harmless Window-Control Verification. StayPane does not need or request Screen Recording.
+
+If Accessibility previously contained the development copy from `.build`, remove that obsolete entry and add the installed app. macOS does not let StayPane grant or migrate this permission itself. Because source updates remain ad-hoc signed, macOS may occasionally require authorization again after a rebuild.
 
 Accessibility lets StayPane discover, minimize, restore, and refocus windows. The permission is powerful, but StayPane remains an honest self-control tool rather than a tamper-proof security boundary. Force Quit, source modification, uninstalling, administrator actions, revoking Accessibility, or disabling the Chrome companion remain deliberate bypasses. When complete enforcement becomes unreliable, StayPane uses Fail Open and restores what it can.
 
@@ -49,19 +55,19 @@ Session state, minimal Session History, redacted Diagnostics, Native Bridge mess
 
 ## Install Chrome Integration
 
-Chrome setup is optional for native Application Targets and Window Targets. Run this one setup command when Browser Window Targets or Tab Targets are needed:
+Chrome setup is optional for native Application Targets and Window Targets. `make install` registers the installed Native Bridge automatically. Run this command only if the app reports that the registration needs repair:
 
 ```sh
 make setup-chrome
 ```
 
-The command builds the extension, app, and Native Bridge, packages them into `.build/StayPane.app`, and writes the user-level Native Host Registration for the fixed unpacked extension identity. It requires no paid Apple or Google developer account.
+The command requires an installed copy and rewrites the user-level Native Host Registration to `~/Applications/StayPane.app/Contents/MacOS/StayPaneBridge` for the fixed unpacked extension identity. It requires no paid Apple or Google developer account. Contributors testing `.build` explicitly use `make setup-chrome-dev`.
 
 Then load the companion:
 
 1. Open `chrome://extensions` in each Chrome Profile that will provide browser Targets.
 2. Enable **Developer mode**.
-3. Choose **Load unpacked** and select `.build/StayPane.app/Contents/Resources/ChromeExtension`.
+3. Choose **Load unpacked** and select `~/Applications/StayPane.app/Contents/Resources/ChromeExtension`.
 4. Open **StayPane Chrome Companion → Details** and enable **Allow in Incognito**. Incognito tabs remain unselectable; this capability lets StayPane minimize Incognito windows during precise browser enforcement.
 5. Keep StayPane running. Repeat the preceding steps for every Chrome Profile represented in a Session Allowlist.
 
@@ -77,6 +83,8 @@ The registered manifest is stored at:
 
 It permits only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke` and points to the packaged `StayPaneBridge` executable.
 
+If the manifest points to an earlier `.build/StayPane.app`, StayPane reports that the Native Host Registration needs repair and offers **Repair Native Host**. Users migrating from the development bundle must also remove the old unpacked extension once and load it from the installed path. Future source updates keep that path stable and require only Chrome's **Reload** action.
+
 ### Remove Chrome Integration
 
 1. Open `chrome://extensions` in every configured Chrome Profile and choose **Remove** for StayPane Chrome Companion.
@@ -86,9 +94,20 @@ It permits only extension ID `hoofhoedlagpoclhkgnkmejaihaapoke` and points to th
    rm "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.staypane.native_bridge.json"
    ```
 
-3. Quit StayPane. Removing `.build/StayPane.app` is optional and does not remove local Session History automatically.
+3. Quit StayPane, open `~/Applications` in Finder, and move StayPane to the Trash. Removing the application does not remove local Session History automatically.
 
 Native Application Target and Window Target Sessions remain usable without Chrome Integration.
+
+### Optional local-data removal
+
+Local data is deliberately preserved when StayPane is reinstalled or removed. Only after StayPane is fully quit, no Session or Restoration is active, and you have backed up anything you want to keep, you may remove it manually:
+
+```sh
+rm -rf "$HOME/Library/Application Support/StayPane"
+defaults delete org.staypane.app
+```
+
+This is irreversible: it deletes local Recovery data, Session History, settings, onboarding progress, and floating-timer preferences. It is not required for ordinary uninstalling or updating.
 
 ## Update StayPane
 
@@ -97,10 +116,10 @@ StayPane never downloads or installs updates automatically. Review the upstream 
 ```sh
 git pull --ff-only
 make verify
-make setup-chrome
+make install
 ```
 
-Open `chrome://extensions` and choose **Reload** for StayPane Chrome Companion in every configured Chrome Profile, then reopen StayPane. Reloading is required because Chrome keeps the previously loaded extension files until told to refresh them.
+Quit StayPane before `make install`; installation never force-quits an active Session. Open `chrome://extensions` and choose **Reload** for StayPane Chrome Companion in every configured Chrome Profile. Reloading is required because Chrome keeps the previously loaded extension files until told to refresh them.
 
 ## Short release smoke Session
 

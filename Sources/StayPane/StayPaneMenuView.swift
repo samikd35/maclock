@@ -25,6 +25,10 @@ struct StayPaneMenuView: View {
                         NoticeBanner(message: notice)
                     }
 
+                    if model.shouldShowInstalledAccessibilityMigration {
+                        installedAccessibilityMigration
+                    }
+
                     content
                 }
                 .padding(16)
@@ -70,6 +74,37 @@ struct StayPaneMenuView: View {
                 )
             }
         }
+    }
+
+    private var installedAccessibilityMigration: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                "Authorize the installed StayPane app",
+                systemImage: "hand.raised.fill"
+            )
+            .font(.headline)
+            Text(
+                "In Accessibility settings, remove the old .build/StayPane.app entry if it exists. Add ~/Applications/StayPane.app, turn it on, then return here and check again."
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            HStack {
+                Button("Open Accessibility Settings") {
+                    model.requestAccessibilityAccess()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Check Again") {
+                    model.refreshAccessibilityStatus()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "Installed StayPane Accessibility setup required"
+        )
     }
 
     private var header: some View {
@@ -153,11 +188,7 @@ struct StayPaneMenuView: View {
                     value: model.chromeSetupState.title,
                     isReady: browserIntegrationReady
                 ) {
-                    Button(
-                        model.nativeHostRegistered
-                            ? "Repair Native Host"
-                            : "Register Native Host"
-                    ) {
+                    Button(model.nativeHostRegistrationActionTitle) {
                         model.registerNativeHost()
                     }
                     Button("Instructions") {

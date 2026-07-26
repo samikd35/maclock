@@ -15,13 +15,17 @@ for required_tool in \
     bash \
     codesign \
     git \
+    iconutil \
     lipo \
     make \
     node \
     npm \
     otool \
     plutil \
-    swift
+    sips \
+    shlock \
+    swift \
+    swiftc
 do
     command -v "$required_tool" >/dev/null \
         || fail "required tool is unavailable: $required_tool"
@@ -59,6 +63,7 @@ run_step "Release contract" make test-release
 run_step "Swift app, engine, bridge, and privacy tests" make test
 run_step "Chrome companion tests" make test-extension
 run_step "Release app and Native Bridge build" make app
+run_step "Hermetic local install" make test-install
 run_step "Packaged source release audit" \
     bash scripts/audit-source-release.sh
 

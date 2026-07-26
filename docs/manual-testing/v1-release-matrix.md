@@ -24,16 +24,17 @@ Do not record application names, document titles, tab titles, URLs, domains, or 
 1. Use a disposable macOS user account with no previous StayPane data or Native Host Registration.
 2. Follow only [`../INSTALL.md`](../INSTALL.md), beginning with a fresh `git clone`.
 3. Run `make verify`. Record **Pass** only if the release contract, Swift suite, Chrome-extension suite, app build, Native Bridge build, and package audit all pass.
-4. Run `make setup-chrome` and confirm it prints the user-level manifest path without requiring a paid developer account.
-5. Run `make run`, complete First-Run Onboarding, and confirm no Screen Recording request appears.
+4. Run `make install` and confirm StayPane is installed in `~/Applications`, the Native Host manifest points to that installed bridge, and no paid account or administrator permission is required.
+5. Open StayPane from Applications, complete First-Run Onboarding, and confirm no Screen Recording request appears.
 
 | Gate | Expected result | Result | Notes |
 | --- | --- | --- | --- |
 | Fresh clone | No ignored build output or machine-local state is required. | | |
 | Automated verification | `make verify` passes with summarized, redacted output. | | |
+| Installed application presence | StayPane appears in Applications, Launchpad, Spotlight, Command-Tab, and the Dock while retaining its menu-bar item. | | |
 | Native Host Registration | The manifest points to the packaged bridge, accepts only the fixed extension identity, and has owner-only permissions. | | |
 | Unsigned source distribution | The locally built app is ad-hoc signed; no Developer ID, notarization, Web Store, or paid-account claim is made. | | |
-| First-Run Onboarding | Accessibility, honest boundary, local-only privacy, optional Chrome setup, and Harmless Window-Control Verification work from the public guide. | | |
+| First-Run Onboarding | Accessibility, honest boundary, local-only privacy, optional Chrome setup, and Harmless Window-Control Verification work from the public guide. A user migrating from `.build` sees the separate installed-copy Accessibility guidance even when general onboarding was already completed. | | |
 
 ## Short Real Session
 
@@ -69,6 +70,7 @@ Use the detailed procedures in [Ticket 04 window enforcement](ticket-04-window-e
 | Accessibility Permission Loss | Revocation during enforcement triggers Fail Open, Restoration, Interrupted, and repair-required setup without trapping the user. | | |
 | Restoration Failure | One failed window remains locally retryable and reported while other windows restore and the user regains control. | | |
 | Notification denial | Status Panel and menu-bar completion feedback remain available without notification permission. | | |
+| Dock and menu-bar lifecycle | Closing the Status Panel keeps both presences running; the Dock icon reopens it, and Quit uses controlled Restoration. | | |
 | Keyboard, VoiceOver, contrast, and motion | The Ticket 13 matrix passes the complete setup, active, reset, History, Diagnostics, and completion flow. | | |
 
 ## Chrome Integration matrix
@@ -77,7 +79,7 @@ Install the unpacked companion in at least two ordinary Chrome Profiles and enab
 
 | Case | Expected result | Result | Notes |
 | --- | --- | --- | --- |
-| Developer Mode installation | Load unpacked, Reload, Test Connection, Remove, and reinstall work using the public installation guide. | | |
+| Developer Mode installation | Load unpacked from the installed app, Reload, Test Connection, Remove, and reinstall work using the public installation guide. | | |
 | Multiple Tab Targets | Several selected tabs remain independent; closing one does not broaden another or end the Session. | | |
 | Navigation Scopes | Current Website and Exact Page enforce their documented hostname/path/query boundaries, link transfer, reload, and Blocked Navigation return to the Last Allowed Page. | | |
 | Broad Chrome Application Target | Every Chrome window, tab, website, and Incognito window is intentionally allowed with a visible breadth warning. | | |
@@ -97,7 +99,7 @@ Use the [Ticket 07 privacy procedure](ticket-07-privacy.md) and inspect the buil
 | Local-only artifacts | Session History, active Recovery, Diagnostics, and Diagnostic Export contain no prohibited Target or browsing content. | | |
 | No silent network behavior | No account, server, analytics, telemetry, automatic crash upload, remote policy, background update, or automatic Diagnostics submission occurs. | | |
 | Remove Chrome Integration | Removing the companion and manifest disables browser Targets while native Application Targets and Window Targets remain usable. | | |
-| Manual update | `git pull --ff-only`, `make verify`, `make setup-chrome`, and companion Reload update every local component explicitly. | | |
+| Manual update | `git pull --ff-only`, `make verify`, `make install`, and companion Reload update every local component explicitly. | | |
 
 ## Final sign-off
 

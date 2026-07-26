@@ -24,6 +24,58 @@ import Testing
     )
 }
 
+@Test func installedAccessibilityMigrationIsIndependentAndPathSpecific() throws {
+    let suiteName =
+        "StayPaneInstalledAccessibilityMigrationTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = InstalledAccessibilityMigrationStore(defaults: defaults)
+    let homeURL = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+    let installedURL = homeURL
+        .appendingPathComponent("Applications", isDirectory: true)
+        .appendingPathComponent("StayPane.app", isDirectory: true)
+    let developmentURL = homeURL
+        .appendingPathComponent("Source/.build/StayPane.app")
+
+    #expect(
+        InstalledAccessibilityMigrationStore.isInstalledApplication(
+            bundleURL: installedURL,
+            homeDirectoryURL: homeURL
+        )
+    )
+    #expect(
+        !InstalledAccessibilityMigrationStore.isInstalledApplication(
+            bundleURL: developmentURL,
+            homeDirectoryURL: homeURL
+        )
+    )
+    #expect(
+        InstalledAccessibilityMigrationStore.shouldPresent(
+            isInstalledApplication: true,
+            accessibilityVerified: false,
+            migrationCompleted: store.isCompleted
+        )
+    )
+
+    store.markCompleted()
+
+    #expect(store.isCompleted)
+    #expect(
+        !InstalledAccessibilityMigrationStore.shouldPresent(
+            isInstalledApplication: true,
+            accessibilityVerified: false,
+            migrationCompleted: store.isCompleted
+        )
+    )
+    #expect(
+        !InstalledAccessibilityMigrationStore.shouldPresent(
+            isInstalledApplication: true,
+            accessibilityVerified: true,
+            migrationCompleted: false
+        )
+    )
+}
+
 @Test func accessibilitySetupDistinguishesEveryPermissionOutcome() {
     #expect(
         AccessibilitySetupState.resolve(

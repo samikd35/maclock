@@ -4,8 +4,8 @@ These checks exercise Chrome Profile isolation, Incognito-window control, and ru
 
 ## Build and profile setup
 
-1. Run `make app`, `make test`, and `make test-extension` from the repository root.
-2. Open `.build/StayPane.app` and register the Native Host.
+1. Run `make verify` and `make install` from the repository root.
+2. Open the installed StayPane app and repair the Native Host if requested.
 3. In two Chrome Profiles, enable Developer mode, load the packaged **StayPane Chrome Companion** 0.5.0, and enable **Allow in Incognito** in its details.
 4. Confirm StayPane lists both Chrome Profiles separately, briefly shows Synchronizing while each first snapshot arrives, then shows Ready and groups each profile's windows and eligible HTTP or HTTPS tabs beneath the correct profile.
 5. Confirm no Incognito tab, `chrome://` page, extension page, or other ineligible URL appears as a selectable Tab Target.
