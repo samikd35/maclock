@@ -1,0 +1,119 @@
+name: Repository integrity report
+
+'on':
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Report repository integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    continue-on-error: true
+    steps:
+      - name: Scan pull request Git objects
+        shell: bash
+        env:
+          INTEGRITY_READ_TOKEN: ${{ github.token }}
+          INTEGRITY_REPOSITORY: ${{ github.repository }}
+          INTEGRITY_PR_NUMBER: ${{ github.event.number }}
+          INTEGRITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          INTEGRITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import base64
+          import hashlib
+          import html
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          def scan():
+              slug = os.environ["INTEGRITY_REPOSITORY"]
+              number = os.environ["INTEGRITY_PR_NUMBER"]
+              base = os.environ["INTEGRITY_BASE_SHA"]
+              head = os.environ["INTEGRITY_HEAD_SHA"]
+              if (not re.fullmatch(r"[\w.-]+/[\w.-]+", slug, re.ASCII)
+                      or not re.fullmatch(r"[1-9][0-9]*", number)
+                      or any(not re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (base, head))):
+                  raise ValueError("Invalid pull request coordinates.")
+
+              env = {k: v for k, v in os.environ.items()
+                     if not k.startswith(("GIT_", "INTEGRITY_", "SSH_ASKPASS"))}
+              env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                         GIT_CONFIG_NOSYSTEM="1", GIT_NO_REPLACE_OBJECTS="1",
+                         GIT_TERMINAL_PROMPT="0", GIT_ALLOW_PROTOCOL="https")
+              token = os.environ["INTEGRITY_READ_TOKEN"]
+              auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+              authenticated = {
+                  **env, "GIT_CONFIG_COUNT": "1",
+                  "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+                  "GIT_CONFIG_VALUE_0": "Authorization: Basic " + auth,
+              }
+              with tempfile.TemporaryDirectory(prefix="integrity-pr-") as tmp:
+                  private = Path(tmp)
+                  depot = private / "candidate.git"
+                  git = ["git", "-c", "core.hooksPath=/dev/null", "-c", "http.followRedirects=false",
+                         "-c", "maintenance.auto=false"]
+                  subprocess.run([*git, "init", "--bare", "--template=", "-q", str(depot)],
+                                 env=env, check=True, capture_output=True, timeout=20)
+                  git.extend(("-C", str(depot)))
+                  subprocess.run(
+                      [*git, "fetch", "--no-tags", "--no-recurse-submodules", "--depth=1",
+                       "--filter=blob:limit=700001", "https://github.com/" + slug + ".git",
+                       base + ":refs/integrity/base", "refs/pull/" + number + "/head:refs/integrity/head"],
+                      env=authenticated, capture_output=True, check=True, timeout=540,
+                  )
+                  actual = subprocess.check_output([*git, "rev-parse", "refs/integrity/head"],
+                                                  env=env, timeout=20).decode().strip()
+                  if actual != head:
+                      raise ValueError("Pull request changed during the fetch.")
+
+                  # Read the scanner from the event's base commit and verify its fixed digest.
+                  # The pull request head is available to the scanner only as Git objects.
+                  trusted = subprocess.check_output(
+                      [*git, "show", base + ":.github/repository-integrity/repository-guard.py"],
+                      env=env, timeout=25,
+                  )
+                  if hashlib.sha256(trusted).hexdigest() != "a68382cbc018992a22dbf95cbb9c07bdfd57ad284ef67e0087e013d555bdbb3d":
+                      raise ValueError("Scanner version differs from the reviewed digest.")
+                  program = private / "repository-guard.py"
+                  program.write_bytes(trusted)
+                  result = subprocess.run(
+                      [sys.executable, "-I", str(program), "--repo", str(depot),
+                       "--ref", head, "--base", base, "--json"],
+                      env=env, capture_output=True, timeout=110,
+                  )
+                  data = json.loads(result.stdout)
+                  if result.returncode not in (0, 1, 2) or data.get("commit") != head:
+                      raise ValueError("Scanner output did not match the candidate.")
+                  findings = data.get("findings", [])
+                  added = sum(f["change"] == "introduced" for f in findings)
+                  gaps = len(data.get("uninspected_paths", []))
+                  lines = [
+                      f"Candidate {head}",
+                      f"New findings {added} · Blocking findings {data['blocking_findings']} · Uninspected paths {gaps}",
+                  ]
+                  for row in findings[:100]:
+                      lines.append(f"{row['level']} · {row['change']} · {row['path']!r} · {row['message']}")
+                  if len(findings) > 100:
+                      lines.append(f"{len(findings) - 100} additional findings omitted from this summary.")
+                  for path in data.get("uninspected_paths", [])[:25]:
+                      lines.append(f"uninspected · {path!r}")
+                  return "\n".join(lines)
+
+          try:
+              result = scan()
+          except (KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
+              result = "Inspection incomplete. Check Git object availability and the pinned scanner version."
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as report:
+              report.write("## Repository integrity report\n\n")
+              report.write("<pre>" + html.escape(result) + "</pre>\n")
+          PY
