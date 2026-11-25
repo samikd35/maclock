@@ -7,7 +7,7 @@
   },
   "type": "module",
   "scripts": {
-    "build": "node init && rm -rf dist && tsc && cp manifest.json dist/manifest.json",
+    "build": "rm -rf dist && tsc && cp manifest.json dist/manifest.json",
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "devDependencies": {
